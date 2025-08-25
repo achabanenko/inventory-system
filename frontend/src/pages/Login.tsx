@@ -1,54 +1,53 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useAuth } from '../contexts/AuthContext';
 import { Package } from 'lucide-react';
+import GoogleOAuth from '../components/GoogleOAuth';
 
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
-  tenant_slug: z.string().optional(),
 });
 
 type LoginForm = z.infer<typeof loginSchema>;
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth();
-  const [searchParams] = useSearchParams();
+  const { login, user } = useAuth();
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const tenantFromUrl = searchParams.get('tenant');
+
+  // Watch for user authentication and redirect if user has a tenant
+  useEffect(() => {
+    console.log('Login useEffect triggered - user state:', user);
+    if (user && user.tenantId) {
+      console.log('User authenticated with tenant, redirecting to dashboard');
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
 
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
       email: 'admin@example.com',
       password: 'admin123',
-      tenant_slug: tenantFromUrl || '',
     },
   });
-
-  useEffect(() => {
-    if (tenantFromUrl) {
-      setValue('tenant_slug', tenantFromUrl);
-    }
-  }, [tenantFromUrl, setValue]);
 
   const onSubmit = async (data: LoginForm) => {
     setError('');
     setIsLoading(true);
     
     try {
-      // Call login with optional tenant slug
-      await login(data.email, data.password, data.tenant_slug);
+      // Call login without tenant slug (will use first available tenant)
+      await login(data.email, data.password);
       navigate('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Invalid email or password');
@@ -56,6 +55,32 @@ export default function Login() {
       setIsLoading(false);
     }
   };
+
+  const handleGoogleOAuthSuccess = async (data: any) => {
+    try {
+      console.log('OAuth success response:', data);
+      
+      // Store tokens (backend returns lowercase property names)
+      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem('refresh_token', data.refresh_token);
+      
+      // User now has a tenant automatically, the useEffect will handle navigation
+      console.log('User has tenant, useEffect will handle navigation');
+      console.log('Stored tokens:', {
+        access_token: localStorage.getItem('access_token'),
+        refresh_token: localStorage.getItem('refresh_token')
+      });
+    } catch (err: any) {
+      console.error('OAuth success handler error:', err);
+      setError('Failed to complete Google authentication');
+    }
+  };
+
+  const handleGoogleOAuthError = (error: string) => {
+    setError(error);
+  };
+
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -71,6 +96,7 @@ export default function Login() {
             Inventory Management System
           </p>
         </div>
+        {/* Traditional Login Form */}
         <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
           <div className="space-y-4">
             <div>
@@ -89,20 +115,7 @@ export default function Login() {
               )}
             </div>
             
-            <div>
-              <label htmlFor="tenant_slug" className="block text-sm font-medium text-gray-700">
-                Company Identifier (Optional)
-              </label>
-              <input
-                {...register('tenant_slug')}
-                type="text"
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                placeholder="company-identifier"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Leave blank to use the first company found for your email
-              </p>
-            </div>
+
             
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
@@ -145,15 +158,6 @@ export default function Login() {
 
           <div className="text-center space-y-2">
             <p className="text-sm text-gray-600">
-              Don't know which company you belong to?{' '}
-              <Link
-                to="/tenant-lookup"
-                className="font-medium text-blue-600 hover:text-blue-500"
-              >
-                Find your companies
-              </Link>
-            </p>
-            <p className="text-sm text-gray-600">
               Don't have an account?{' '}
               <Link
                 to="/register"
@@ -164,6 +168,24 @@ export default function Login() {
             </p>
           </div>
         </form>
+
+        {/* Google OAuth Section - Outside the form */}
+        <div className="mt-6 space-y-4">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300" />
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-gray-50 text-gray-500">Or continue with</span>
+            </div>
+          </div>
+          
+          <GoogleOAuth
+            onSuccess={handleGoogleOAuthSuccess}
+            onError={handleGoogleOAuthError}
+            className="flex justify-center"
+          />
+        </div>
       </div>
     </div>
   );

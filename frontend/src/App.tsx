@@ -8,6 +8,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import TenantLookup from './pages/TenantLookup';
+import GoogleOAuthCallback from './pages/GoogleOAuthCallback';
 import Dashboard from './pages/Dashboard';
 import Items from './pages/Items';
 import Inventory from './pages/Inventory';
@@ -32,6 +33,14 @@ const queryClient = new QueryClient({
 });
 
 function App() {
+  // Debug: Log environment variables on app start
+  console.log('=== APP STARTUP DEBUG ===');
+  console.log('All environment variables:', import.meta.env);
+  console.log('VITE_GOOGLE_CLIENT_ID:', import.meta.env.VITE_GOOGLE_CLIENT_ID);
+  console.log('VITE_GOOGLE_REDIRECT_URI:', import.meta.env.VITE_GOOGLE_REDIRECT_URI);
+  console.log('VITE_API_URL:', import.meta.env.VITE_API_URL);
+  console.log('========================');
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
@@ -40,6 +49,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/tenant-lookup" element={<TenantLookup />} />
+            <Route path="/google-oauth-callback" element={<GoogleOAuthCallback />} />
             <Route
               path="/"
               element={

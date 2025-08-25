@@ -1,12 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import api from '../lib/api';
+import { login as loginApi, googleOAuth } from '../api/auth';
 
 interface User {
   id: string;
   email: string;
   name: string;
   role: 'ADMIN' | 'MANAGER' | 'CLERK';
-  tenantId: string;
+  tenantId: string | null;
 }
 
 interface Tenant {
@@ -20,6 +20,7 @@ interface AuthContextType {
   user: User | null;
   tenant: Tenant | null;
   login: (email: string, password: string, tenantSlug?: string) => Promise<void>;
+  loginWithGoogle: (code: string, redirectUri: string) => Promise<any>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -44,20 +45,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const fetchCurrentUserAndTenant = async () => {
     try {
       // TODO: Replace with actual API calls to get user and tenant info
-      // For now, using placeholder data
-      setUser({
-        id: '1',
-        email: 'admin@example.com',
-        name: 'Admin User',
-        role: 'ADMIN',
-        tenantId: 'default-tenant-id',
-      });
-      
-      setTenant({
-        id: 'default-tenant-id',
-        name: 'Default Company',
-        slug: 'default',
-      });
+      // For now, don't set any default values - let the user authenticate properly
+      console.log('fetchCurrentUserAndTenant called - no default values set');
     } catch (error) {
       console.error('Failed to fetch user/tenant info:', error);
       localStorage.removeItem('access_token');
@@ -74,8 +63,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginData.tenant_slug = tenantSlug;
       }
       
-      const response = await api.post('/auth/login', loginData);
-      const { access_token, refresh_token, user, tenant } = response.data;
+      const response = await loginApi(email, password, tenantSlug);
+      const { access_token, refresh_token, user, tenant } = response;
       
       localStorage.setItem('access_token', access_token);
       localStorage.setItem('refresh_token', refresh_token);
@@ -99,8 +88,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Fallback to fetching user and tenant information
         await fetchCurrentUserAndTenant();
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login failed:', error);
+      throw error;
+    }
+  };
+
+  const loginWithGoogle = async (code: string, redirectUri: string): Promise<any> => {
+    try {
+      console.log('loginWithGoogle called with:', { code, redirectUri });
+      
+      // Call the backend OAuth endpoint
+      const oauthData = { code, redirect_uri: redirectUri };
+      console.log('OAuth data being sent:', oauthData);
+      const response = await googleOAuth(oauthData);
+      console.log('OAuth response received:', response);
+      
+      localStorage.setItem('access_token', response.access_token);
+      localStorage.setItem('refresh_token', response.refresh_token);
+      
+      // Set user and tenant from OAuth response (backend returns lowercase property names)
+      if (response.user) {
+        console.log('Setting user state:', response.user);
+        const newUser = {
+          id: response.user.id,
+          email: response.user.email,
+          name: response.user.name,
+          role: response.user.role,
+          tenantId: response.user.tenant_id || null, // May be null if user needs tenant selection
+        };
+        
+        console.log('About to set user state to:', newUser);
+        setUser(newUser);
+        
+        // Only set tenant if it exists (user already has a tenant)
+        if (response.tenant) {
+          console.log('Setting tenant state:', response.tenant);
+          const newTenant = {
+            id: response.tenant.id,
+            name: response.tenant.name,
+            slug: response.tenant.slug,
+          };
+          
+          console.log('About to set tenant state to:', newTenant);
+          setTenant(newTenant);
+        } else {
+          console.log('No tenant in response - user needs tenant selection');
+          setTenant(null);
+        }
+        
+        // Verify state was set
+        setTimeout(() => {
+          console.log('User state after setting:', user);
+          console.log('Tenant state after setting:', tenant);
+        }, 100);
+      } else {
+        console.log('No user in response, response structure:', response);
+        console.log('Response keys:', Object.keys(response));
+      }
+      
+      // Return the response so the calling component can access it
+      return response;
+    } catch (error: any) {
+      console.error('Google OAuth login failed:', error);
       throw error;
     }
   };
@@ -113,7 +163,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, tenant, login, logout, isLoading }}>
+    <AuthContext.Provider value={{
+      user,
+      tenant,
+      login,
+      loginWithGoogle,
+      logout,
+      isLoading,
+    }}>
       {children}
     </AuthContext.Provider>
   );

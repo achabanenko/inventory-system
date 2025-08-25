@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useAuth } from '../contexts/AuthContext';
-import { Package, Building, Users, ArrowLeft } from 'lucide-react';
+import { Package, ArrowLeft } from 'lucide-react';
 import api from '../lib/api';
 
 const registerSchema = z.object({
@@ -17,15 +17,11 @@ const registerSchema = z.object({
 
 type RegisterForm = z.infer<typeof registerSchema>;
 
-type RegistrationType = 'new-tenant' | 'join-tenant';
-
 export default function Register() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { } = useAuth();
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [registrationType, setRegistrationType] = useState<RegistrationType>('new-tenant');
-  const [tenantSlug, setTenantSlug] = useState('');
 
   const {
     register,
@@ -57,12 +53,8 @@ export default function Register() {
         name: data.name,
         email: data.email,
         password: data.password,
-        ...(registrationType === 'new-tenant' ? {
-          tenant_name: data.tenant_name,
-          tenant_slug: data.tenant_slug || generateSlug(data.tenant_name),
-        } : {
-          tenant_slug: tenantSlug,
-        }),
+        tenant_name: data.tenant_name,
+        tenant_slug: data.tenant_slug || generateSlug(data.tenant_name),
       };
 
       const response = await api.post('/auth/register', payload);
@@ -97,38 +89,8 @@ export default function Register() {
           </p>
         </div>
 
-        {/* Registration Type Selection */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setRegistrationType('new-tenant')}
-              className={`flex flex-col items-center p-4 rounded-lg border-2 transition-colors ${
-                registrationType === 'new-tenant'
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 text-gray-600 hover:border-gray-300'
-              }`}
-            >
-              <Building className="h-8 w-8 mb-2" />
-              <span className="text-sm font-medium">New Company</span>
-              <span className="text-xs text-center">Start fresh with your own company</span>
-            </button>
-            
-            <button
-              type="button"
-              onClick={() => setRegistrationType('join-tenant')}
-              className={`flex flex-col items-center p-4 rounded-lg border-2 transition-colors ${
-                registrationType === 'join-tenant'
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 text-gray-600 hover:border-gray-300'
-              }`}
-            >
-              <Users className="h-8 w-8 mb-2" />
-              <span className="text-sm font-medium">Join Company</span>
-              <span className="text-xs text-center">Join an existing company</span>
-            </button>
-          </div>
-        </div>
+
+
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
           <div className="space-y-4">
@@ -181,56 +143,35 @@ export default function Register() {
             </div>
 
             {/* Company Information */}
-            {registrationType === 'new-tenant' ? (
-              <>
-                <div>
-                  <label htmlFor="tenant_name" className="block text-sm font-medium text-gray-700">
-                    Company Name
-                  </label>
-                  <input
-                    {...register('tenant_name')}
-                    type="text"
-                    className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                    placeholder="Your company name"
-                  />
-                  {errors.tenant_name && (
-                    <p className="mt-1 text-sm text-red-600">{errors.tenant_name.message}</p>
-                  )}
-                </div>
+            <div>
+              <label htmlFor="tenant_name" className="block text-sm font-medium text-gray-700">
+                Company Name
+              </label>
+              <input
+                {...register('tenant_name')}
+                type="text"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                placeholder="Your company name"
+              />
+              {errors.tenant_name && (
+                <p className="mt-1 text-sm text-red-600">{errors.tenant_name.message}</p>
+              )}
+            </div>
 
-                <div>
-                  <label htmlFor="tenant_slug" className="block text-sm font-medium text-gray-700">
-                    Company Identifier
-                  </label>
-                  <input
-                    {...register('tenant_slug')}
-                    type="text"
-                    className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                    placeholder={watchedTenantName ? generateSlug(watchedTenantName) : 'your-company'}
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    URL-safe identifier for your company. Leave blank to auto-generate.
-                  </p>
-                </div>
-              </>
-            ) : (
-              <div>
-                <label htmlFor="tenant_slug" className="block text-sm font-medium text-gray-700">
-                  Company Identifier
-                </label>
-                <input
-                  type="text"
-                  value={tenantSlug}
-                  onChange={(e) => setTenantSlug(e.target.value)}
-                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  placeholder="company-identifier"
-                  required
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  Enter the company identifier provided by your administrator.
-                </p>
-              </div>
-            )}
+            <div>
+              <label htmlFor="tenant_slug" className="block text-sm font-medium text-gray-700">
+                Company Identifier
+              </label>
+              <input
+                {...register('tenant_slug')}
+                type="text"
+                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                placeholder={watchedTenantName ? generateSlug(watchedTenantName) : 'your-company'}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                URL-safe identifier for your company. Leave blank to auto-generate.
+              </p>
+            </div>
           </div>
 
           {error && (

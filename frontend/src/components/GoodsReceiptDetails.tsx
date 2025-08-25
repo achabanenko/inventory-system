@@ -212,7 +212,7 @@ export default function GoodsReceiptDetails() {
               )}
               <div>
                 <dt className="text-gray-500">Total</dt>
-                <dd className="text-gray-900 font-bold text-lg">${typeof receipt.total === 'number' ? receipt.total.toFixed(2) : (parseFloat(receipt.total || '0') || 0).toFixed(2)}</dd>
+                <dd className="text-gray-900 font-bold text-lg">${(parseFloat(receipt.total?.toString() || '0') || 0).toFixed(2)}</dd>
               </div>
             </dl>
           </div>

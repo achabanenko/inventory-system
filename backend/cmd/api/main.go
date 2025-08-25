@@ -100,10 +100,12 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 
 	auth := api.Group("/auth")
 	auth.POST("/login", h.Login)
+	auth.POST("/google", h.GoogleOAuth)
 	auth.POST("/refresh", h.Refresh)
 	auth.POST("/logout", h.Logout)
 	auth.POST("/register", h.RegisterUser)
 	auth.GET("/tenant-lookup", h.TenantLookup)
+	auth.POST("/select-tenant", h.SelectTenantForOAuthUser)
 
 	log.Info().Msg("Routes configured: /api/v1/auth/login")
 

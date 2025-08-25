@@ -34,6 +34,36 @@ func main() {
 		log.Fatal("Failed to create schema:", err)
 	}
 
+	// Add OAuth fields to users table
+	log.Println("Adding OAuth fields to users table...")
+
+	_, err = db.Exec(`
+		ALTER TABLE users 
+		ADD COLUMN IF NOT EXISTS oauth_provider VARCHAR(50),
+		ADD COLUMN IF NOT EXISTS oauth_id VARCHAR(255),
+		ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+	`)
+
+	if err != nil {
+		log.Printf("Warning: Failed to add OAuth fields: %v", err)
+	} else {
+		log.Println("OAuth fields added successfully")
+	}
+
+	// Make password_hash optional for OAuth users
+	log.Println("Making password_hash optional...")
+
+	_, err = db.Exec(`
+		ALTER TABLE users 
+		ALTER COLUMN password_hash DROP NOT NULL;
+	`)
+
+	if err != nil {
+		log.Printf("Warning: Failed to make password_hash optional: %v", err)
+	} else {
+		log.Println("password_hash made optional successfully")
+	}
+
 	fmt.Println("Database migration completed successfully!")
 }
 

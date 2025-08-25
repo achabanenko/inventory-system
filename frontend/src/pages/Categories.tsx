@@ -200,7 +200,7 @@ export default function Categories() {
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {getParentName(row.parent_id)}
+                    {getParentName(row.parent_id || null)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(row.created_at).toLocaleDateString()}

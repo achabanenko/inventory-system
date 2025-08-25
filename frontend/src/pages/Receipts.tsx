@@ -134,7 +134,7 @@ export default function Receipts() {
   };
 
   const [linesOpen, setLinesOpen] = useState(false);
-  const [current, setCurrent] = useState<GoodsReceipt | null>(null);
+  const [current] = useState<GoodsReceipt | null>(null);
   const [lines, setLines] = useState<GoodsReceiptLine[]>([]);
   const [itemQuery, setItemQuery] = useState('');
   const [itemChoices, setItemChoices] = useState<Item[]>([]);
@@ -199,7 +199,7 @@ export default function Receipts() {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">
-                      ${typeof r.total === 'number' ? r.total.toFixed(2) : (parseFloat(r.total || '0') || 0).toFixed(2)}
+                      ${(parseFloat(r.total?.toString() || '0') || 0).toFixed(2)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="flex items-center justify-end space-x-2">

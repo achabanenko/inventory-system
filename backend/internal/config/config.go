@@ -20,6 +20,10 @@ type Config struct {
 	LogLevel        string
 	MaxPageSize     int
 	DefaultPageSize int
+	// Google OAuth Configuration
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
 }
 
 func Load() (*Config, error) {
@@ -33,6 +37,10 @@ func Load() (*Config, error) {
 		LogLevel:        getEnv("LOG_LEVEL", "debug"),
 		MaxPageSize:     getEnvAsInt("MAX_PAGE_SIZE", 100),
 		DefaultPageSize: getEnvAsInt("DEFAULT_PAGE_SIZE", 20),
+		// Google OAuth Configuration
+		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", "http://localhost:5173/auth/google/callback"),
 	}
 
 	jwtExpiry := getEnvAsInt("JWT_EXPIRY_MINUTES", 15)
