@@ -1,0 +1,100 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Backend specific
+backend/bin/
+backend/.env*
+backend/coverage.txt
+backend/coverage.html
+backend/tmp/
+
+# Frontend specific
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env*
+frontend/.vite/
+frontend/.eslintcache
+frontend/.bun/
+
+# Package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun.log*
+package-lock.json
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# Docker
+docker-compose.override.yml
+
+# Go specific
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Build artifacts
+dist/
+build/
+out/
+tmp/
+temp/
+
+# Test coverage
+coverage/
+.nyc_output
+*.lcov
+
+# Runtime
+*.pid
+*.seed
+*.pid.lock
+
+# Cache directories
+.cache/
+.npm/
+.yarn-integrity
+
+# TypeScript
+*.tsbuildinfo
+
+# Temporary folders and files
+tmp/
+temp/
+.tmp/
