@@ -310,9 +310,9 @@ func (h *Handler) CreatePurchaseOrder(c echo.Context) error {
 	// Create purchase order
 	poID := uuid.New().String()
 	_, err = tx.Exec(`
-		INSERT INTO purchase_orders (id, number, status, supplier_id, created_by, expected_at, notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-	`, poID, poNumber, "DRAFT", req.SupplierID, userID, expectedAt, req.Notes)
+		INSERT INTO purchase_orders (id, number, status, supplier_id, tenant_id, created_by, expected_at, notes, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+	`, poID, poNumber, "DRAFT", req.SupplierID, claims.TenantID, userID, expectedAt, req.Notes)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create purchase order")
 	}
@@ -327,7 +327,7 @@ func (h *Handler) CreatePurchaseOrder(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid unit cost: %s", lineReq.UnitCost))
 		}
 		// Resolve or create item by provided identifier (UUID or SKU)
-		resolvedItemID, resErr := h.resolveOrCreateItem(tx, lineReq.ItemID, unitCostDecimal)
+		resolvedItemID, resErr := h.resolveOrCreateItem(tx, lineReq.ItemID, &unitCostDecimal, claims.TenantID)
 		if resErr != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
 		}
@@ -512,6 +512,12 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
 	}
 
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+
 	// Check if purchase order exists and is in DRAFT status
 	var currentStatus string
 	err := h.DB.QueryRow("SELECT status FROM purchase_orders WHERE id = $1", id).Scan(&currentStatus)
@@ -568,7 +574,7 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid unit cost: %s", lineReq.UnitCost))
 		}
-		resolvedItemID, resErr := h.resolveOrCreateItem(tx, lineReq.ItemID, unitCostDecimal)
+		resolvedItemID, resErr := h.resolveOrCreateItem(tx, lineReq.ItemID, &unitCostDecimal, claims.TenantID)
 		if resErr != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
 		}
@@ -616,17 +622,19 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 
 // resolveOrCreateItem accepts a provided identifier which can be an Item UUID or a SKU.
 // If it's a UUID, it must exist. If it's not a UUID, it's treated as a SKU; if missing, a minimal item is created.
-func (h *Handler) resolveOrCreateItem(tx *sql.Tx, provided string, unitCost decimal.Decimal) (string, error) {
+func (h *Handler) resolveOrCreateItem(tx *sql.Tx, provided string, unitCost *decimal.Decimal, tenantID string) (string, error) {
 	if provided == "" {
 		return "", fmt.Errorf("item identifier is required")
 	}
 	if _, err := uuid.Parse(provided); err == nil {
-		// Provided is UUID; ensure it exists
+		// Provided is UUID; ensure it exists and belongs to the tenant
 		var id string
-		err := tx.QueryRow(`SELECT id FROM items WHERE id = $1 AND (deleted_at IS NULL OR deleted_at > NOW())`, provided).Scan(&id)
+		err := tx.QueryRow(`SELECT id FROM items WHERE id = $1 AND tenant_id = $2 AND (deleted_at IS NULL OR deleted_at > NOW())`, provided, tenantID).Scan(&id)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				return "", fmt.Errorf("invalid item id: %s", provided)
+				// Log more details for debugging
+				fmt.Printf("DEBUG: Item lookup failed - provided: %s, tenantID: %s\n", provided, tenantID)
+				return "", fmt.Errorf("invalid item id: %s (tenant: %s)", provided, tenantID)
 			}
 			return "", err
 		}
@@ -636,7 +644,7 @@ func (h *Handler) resolveOrCreateItem(tx *sql.Tx, provided string, unitCost deci
 	// Treat as SKU path
 	sku := provided
 	var existingID string
-	err := tx.QueryRow(`SELECT id FROM items WHERE sku = $1 AND (deleted_at IS NULL OR deleted_at > NOW())`, sku).Scan(&existingID)
+	err := tx.QueryRow(`SELECT id FROM items WHERE sku = $1 AND tenant_id = $2 AND (deleted_at IS NULL OR deleted_at > NOW())`, sku, tenantID).Scan(&existingID)
 	if err == nil {
 		return existingID, nil
 	}
@@ -646,11 +654,18 @@ func (h *Handler) resolveOrCreateItem(tx *sql.Tx, provided string, unitCost deci
 
 	// Create minimal item
 	newID := uuid.New().String()
-	unitCostStr := unitCost.StringFixed(2)
+	var costStr, priceStr string
+	if unitCost != nil {
+		costStr = unitCost.StringFixed(2)
+		priceStr = unitCost.StringFixed(2)
+	} else {
+		costStr = "0.00"
+		priceStr = "0.00"
+	}
 	_, err = tx.Exec(`
-        INSERT INTO items (id, sku, name, uom, cost, price, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, TRUE, NOW(), NOW())
-    `, newID, sku, sku, "each", unitCostStr, unitCostStr)
+        INSERT INTO items (id, sku, name, uom, cost, price, tenant_id, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7, TRUE, NOW(), NOW())
+    `, newID, sku, sku, "each", costStr, priceStr, tenantID)
 	if err != nil {
 		return "", fmt.Errorf("failed to create item for sku %s", sku)
 	}

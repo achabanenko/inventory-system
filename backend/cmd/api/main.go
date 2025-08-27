@@ -12,12 +12,23 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 	echomiddleware "github.com/labstack/echo/v4/middleware"
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+// CustomValidator wraps the validator for Echo
+type CustomValidator struct {
+	validator *validator.Validate
+}
+
+// Validate validates the input struct
+func (cv *CustomValidator) Validate(i interface{}) error {
+	return cv.validator.Struct(i)
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -36,6 +47,9 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+
+	// Set up validator
+	e.Validator = &CustomValidator{validator: validator.New()}
 
 	setupMiddleware(e, cfg)
 
@@ -176,6 +190,8 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 	transfers.GET("", h.ListTransfers)
 	transfers.POST("", h.CreateTransfer)
 	transfers.GET("/:id", h.GetTransfer)
+	transfers.PUT("/:id", h.UpdateTransfer)
+	transfers.DELETE("/:id", h.DeleteTransfer)
 	transfers.POST("/:id/approve", h.ApproveTransfer)
 	transfers.POST("/:id/ship", h.ShipTransfer)
 	transfers.POST("/:id/receive", h.ReceiveTransfer)
@@ -186,6 +202,8 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 	adjustments.GET("", h.ListAdjustments)
 	adjustments.POST("", h.CreateAdjustment)
 	adjustments.GET("/:id", h.GetAdjustment)
+	adjustments.PUT("/:id", h.UpdateAdjustment)
+	adjustments.DELETE("/:id", h.DeleteAdjustment)
 	adjustments.POST("/:id/approve", h.ApproveAdjustment)
 
 	// Goods Receipts

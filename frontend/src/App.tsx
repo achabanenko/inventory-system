@@ -15,6 +15,7 @@ import Inventory from './pages/Inventory';
 import PurchaseOrders from './pages/PurchaseOrders';
 import Transfers from './pages/Transfers';
 import Adjustments from './pages/Adjustments';
+import { AdjustmentDetails } from './components/AdjustmentDetails';
 import Suppliers from './pages/Suppliers';
 import Locations from './pages/Locations';
 import Categories from './pages/Categories';
@@ -22,6 +23,7 @@ import Users from './pages/Users';
 import Counts from './pages/Counts';
 import Receipts from './pages/Receipts';
 import GoodsReceiptDetails from './components/GoodsReceiptDetails';
+import TransferDetails from './components/TransferDetails';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -65,9 +67,11 @@ function App() {
               <Route path="purchase-orders" element={<PurchaseOrders />} />
               <Route path="transfers" element={<Transfers />} />
               <Route path="adjustments" element={<Adjustments />} />
+              <Route path="adjustments/:id" element={<AdjustmentDetails />} />
               <Route path="counts" element={<Counts />} />
               <Route path="receipts" element={<Receipts />} />
               <Route path="receipts/:id" element={<GoodsReceiptDetails />} />
+              <Route path="transfers/:id" element={<TransferDetails />} />
               <Route path="suppliers" element={<Suppliers />} />
               <Route path="locations" element={<Locations />} />
               <Route path="categories" element={<Categories />} />

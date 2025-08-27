@@ -47,12 +47,25 @@ export const listReceipts = async (params?: { page?: number; page_size?: number 
   return res.data;
 };
 
-export const createReceipt = async (payload: { supplier_id?: string; location_id?: string; reference?: string; notes?: string }) => {
+export interface CreateGoodsReceiptRequest {
+  supplier_id?: string;
+  location_id?: string;
+  reference?: string;
+  notes?: string;
+  purchase_order_id?: string;
+  lines?: {
+    item_id: string; // This can be either item ID or SKU
+    qty: number;
+    unit_cost: string;
+  }[];
+}
+
+export const createReceipt = async (payload: CreateGoodsReceiptRequest) => {
   const res = await api.post<GoodsReceipt>('/receipts', payload);
   return res.data;
 };
 
-export const updateReceipt = async (id: string, payload: Partial<{ supplier_id: string; location_id: string; status: ReceiptStatus; reference: string; notes: string }>) => {
+export const updateReceipt = async (id: string, payload: CreateGoodsReceiptRequest) => {
   const res = await api.put<GoodsReceipt>(`/receipts/${id}`, payload);
   return res.data;
 };

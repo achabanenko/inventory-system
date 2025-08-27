@@ -16,24 +16,24 @@ import (
 )
 
 type GoodsReceipt struct {
-	ID         string      `json:"id"`
-	Number     string      `json:"number"`
-	SupplierID *string     `json:"supplier_id,omitempty"`
-	Supplier   *Supplier   `json:"supplier,omitempty"`
-	LocationID *string     `json:"location_id,omitempty"`
-	Location   *Location   `json:"location,omitempty"`
-	Status     string      `json:"status"`
-	Reference  *string     `json:"reference,omitempty"`
-	Notes      *string     `json:"notes,omitempty"`
-	CreatedBy  *string     `json:"created_by,omitempty"`
-	ApprovedBy *string     `json:"approved_by,omitempty"`
-	PostedBy   *string     `json:"posted_by,omitempty"`
-	ApprovedAt *time.Time  `json:"approved_at,omitempty"`
-	PostedAt   *time.Time  `json:"posted_at,omitempty"`
+	ID         string             `json:"id"`
+	Number     string             `json:"number"`
+	SupplierID *string            `json:"supplier_id,omitempty"`
+	Supplier   *Supplier          `json:"supplier,omitempty"`
+	LocationID *string            `json:"location_id,omitempty"`
+	Location   *Location          `json:"location,omitempty"`
+	Status     string             `json:"status"`
+	Reference  *string            `json:"reference,omitempty"`
+	Notes      *string            `json:"notes,omitempty"`
+	CreatedBy  *string            `json:"created_by,omitempty"`
+	ApprovedBy *string            `json:"approved_by,omitempty"`
+	PostedBy   *string            `json:"posted_by,omitempty"`
+	ApprovedAt *time.Time         `json:"approved_at,omitempty"`
+	PostedAt   *time.Time         `json:"posted_at,omitempty"`
 	Lines      []GoodsReceiptLine `json:"lines,omitempty"`
-	Total      decimal.Decimal     `json:"total"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	Total      decimal.Decimal    `json:"total"`
+	CreatedAt  time.Time          `json:"created_at"`
+	UpdatedAt  time.Time          `json:"updated_at"`
 }
 
 type Location struct {
@@ -41,6 +41,8 @@ type Location struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 }
+
+
 
 type GoodsReceiptLine struct {
 	ID        string          `json:"id"`
@@ -55,6 +57,13 @@ type GoodsReceiptLine struct {
 }
 
 func (h *Handler) ListReceipts(c echo.Context) error {
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
 	// Parse query parameters
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	if page <= 0 {
@@ -89,10 +98,10 @@ func (h *Handler) ListReceipts(c echo.Context) error {
 		LEFT JOIN suppliers s ON gr.supplier_id = s.id
 		LEFT JOIN locations l ON gr.location_id = l.id
 		LEFT JOIN goods_receipt_lines grl ON gr.id = grl.receipt_id
-		WHERE 1=1`
+		WHERE gr.tenant_id = $1`
 
-	args := []interface{}{}
-	argCount := 0
+	args := []interface{}{tenantID}
+	argCount := 1
 
 	if search != "" {
 		argCount++
@@ -217,10 +226,10 @@ func (h *Handler) ListReceipts(c echo.Context) error {
 		FROM goods_receipts gr
 		LEFT JOIN suppliers s ON gr.supplier_id = s.id
 		LEFT JOIN locations l ON gr.location_id = l.id
-		WHERE 1=1`
+		WHERE gr.tenant_id = $1`
 
-	countArgs := []interface{}{}
-	countArgCount := 0
+	countArgs := []interface{}{tenantID}
+	countArgCount := 1
 
 	if search != "" {
 		countArgCount++
@@ -264,10 +273,16 @@ func (h *Handler) ListReceipts(c echo.Context) error {
 }
 
 type CreateGoodsReceiptRequest struct {
-	SupplierID *string `json:"supplier_id"`
-	LocationID *string `json:"location_id"`
-	Reference  *string `json:"reference"`
-	Notes      *string `json:"notes"`
+	SupplierID      *string `json:"supplier_id"`
+	LocationID      *string `json:"location_id"`
+	Reference       *string `json:"reference"`
+	Notes           *string `json:"notes"`
+	PurchaseOrderID *string `json:"purchase_order_id"`
+	Lines           []struct {
+		ItemID   string `json:"item_id"`
+		Qty      int    `json:"qty"`
+		UnitCost string `json:"unit_cost"`
+	} `json:"lines"`
 }
 
 func (h *Handler) CreateReceipt(c echo.Context) error {
@@ -282,6 +297,7 @@ func (h *Handler) CreateReceipt(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
 	}
 	userID := claims.UserID
+	tenantID := claims.TenantID
 
 	// Generate receipt number
 	var maxNumber int
@@ -296,14 +312,75 @@ func (h *Handler) CreateReceipt(c echo.Context) error {
 
 	grNumber := fmt.Sprintf("GR-%06d", maxNumber+1)
 
+	// Start transaction for receipt and lines creation
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	defer tx.Rollback()
+
 	// Create receipt
 	grID := uuid.New().String()
-	_, err = h.DB.Exec(`
-		INSERT INTO goods_receipts (id, number, status, supplier_id, location_id, reference, notes, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-	`, grID, grNumber, "DRAFT", req.SupplierID, req.LocationID, req.Reference, req.Notes, userID)
+	_, err = tx.Exec(`
+		INSERT INTO goods_receipts (id, number, status, supplier_id, location_id, reference, notes, tenant_id, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+	`, grID, grNumber, "DRAFT", req.SupplierID, req.LocationID, req.Reference, req.Notes, claims.TenantID, userID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create receipt")
+	}
+
+	// Create receipt lines if provided
+	var total decimal.Decimal
+	if req.Lines != nil && len(req.Lines) > 0 {
+		for _, line := range req.Lines {
+			// Resolve or create item
+			var unitCostDecimal *decimal.Decimal
+			if line.UnitCost != "" {
+				cost, err := decimal.NewFromString(line.UnitCost)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusBadRequest, "Invalid unit cost format")
+				}
+				unitCostDecimal = &cost
+			}
+
+			resolvedItemID, resErr := h.resolveOrCreateItem(tx, line.ItemID, unitCostDecimal, tenantID)
+			if resErr != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
+			}
+
+			// Create receipt line
+			lineID := uuid.New().String()
+			var unitCostValue interface{}
+			if unitCostDecimal != nil {
+				unitCostValue = unitCostDecimal.StringFixed(2)
+			} else {
+				unitCostValue = nil
+			}
+			_, err = tx.Exec(`
+				INSERT INTO goods_receipt_lines (id, receipt_id, item_id, qty, unit_cost, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+			`, lineID, grID, resolvedItemID, line.Qty, unitCostValue)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create receipt line")
+			}
+
+			// Add to total (only if unit cost is provided)
+			if unitCostDecimal != nil {
+				lineTotal := unitCostDecimal.Mul(decimal.NewFromInt(int64(line.Qty)))
+				total = total.Add(lineTotal)
+			}
+		}
+
+		// Update receipt total
+		_, err = tx.Exec(`UPDATE goods_receipts SET total = $1 WHERE id = $2`, total, grID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update receipt total")
+		}
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
 	}
 
 	// Return created receipt
@@ -316,7 +393,7 @@ func (h *Handler) CreateReceipt(c echo.Context) error {
 		Reference:  req.Reference,
 		Notes:      req.Notes,
 		CreatedBy:  &userID,
-		Total:      decimal.NewFromInt(0),
+		Total:      total,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
@@ -326,12 +403,25 @@ func (h *Handler) CreateReceipt(c echo.Context) error {
 
 func (h *Handler) UpdateReceipt(c echo.Context) error {
 	id := c.Param("id")
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
 	var req struct {
 		SupplierID *string `json:"supplier_id"`
 		LocationID *string `json:"location_id"`
 		Status     *string `json:"status"`
 		Reference  *string `json:"reference"`
 		Notes      *string `json:"notes"`
+		Lines      []struct {
+			ItemID   string `json:"item_id"`
+			Qty      int    `json:"qty"`
+			UnitCost string `json:"unit_cost"`
+		} `json:"lines"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -365,21 +455,43 @@ func (h *Handler) UpdateReceipt(c echo.Context) error {
 		args = append(args, *req.Notes)
 		i++
 	}
-	if len(sets) == 0 {
+	// If no header fields to update but lines are provided, we still need to update the receipt
+	// to refresh the updated_at timestamp and potentially update the total
+	if len(sets) == 0 && req.Lines == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "no fields to update")
 	}
-	sets = append(sets, "updated_at = NOW()")
-	args = append(args, id)
 
-	query := fmt.Sprintf(`UPDATE goods_receipts SET %s WHERE id = $%d RETURNING id, number, supplier_id, location_id, status, reference, notes, created_at, updated_at`, strings.Join(sets, ", "), i)
+	// Declare variables outside conditional blocks
 	var out GoodsReceipt
 	var supplierID, locationID, reference, notes sql.NullString
-	if err := h.DB.QueryRow(query, args...).Scan(&out.ID, &out.Number, &supplierID, &locationID, &out.Status, &reference, &notes, &out.CreatedAt, &out.UpdatedAt); err != nil {
-		if err == sql.ErrNoRows {
-			return echo.NewHTTPError(http.StatusNotFound, "receipt not found")
+
+	// Always update the updated_at timestamp if we're making any changes
+	if len(sets) > 0 {
+		sets = append(sets, "updated_at = NOW()")
+		args = append(args, id)
+
+		query := fmt.Sprintf(`UPDATE goods_receipts SET %s WHERE id = $%d AND tenant_id = $%d RETURNING id, number, supplier_id, location_id, status, reference, notes, created_at, updated_at`, strings.Join(sets, ", "), i, i+1)
+		if err := h.DB.QueryRow(query, append(args, tenantID)...).Scan(&out.ID, &out.Number, &supplierID, &locationID, &out.Status, &reference, &notes, &out.CreatedAt, &out.UpdatedAt); err != nil {
+			if err == sql.ErrNoRows {
+				return echo.NewHTTPError(http.StatusNotFound, "receipt not found")
+			}
+			return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
+	} else {
+		// If only lines are being updated, we need to get the current receipt data
+		// and update the updated_at timestamp
+		_, err := h.DB.Exec(`UPDATE goods_receipts SET updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, id, tenantID)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update receipt timestamp")
+		}
+
+		// Get current receipt data for response
+		if err := h.DB.QueryRow(`SELECT id, number, supplier_id, location_id, status, reference, notes, created_at, updated_at FROM goods_receipts WHERE id = $1 AND tenant_id = $2`, id, tenantID).Scan(&out.ID, &out.Number, &supplierID, &locationID, &out.Status, &reference, &notes, &out.CreatedAt, &out.UpdatedAt); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get receipt data")
+		}
 	}
+
+	// Set optional fields if they exist
 	if supplierID.Valid {
 		out.SupplierID = &supplierID.String
 	}
@@ -392,12 +504,92 @@ func (h *Handler) UpdateReceipt(c echo.Context) error {
 	if notes.Valid {
 		out.Notes = &notes.String
 	}
+
+	// Handle lines update if provided
+	if req.Lines != nil {
+		// Start transaction for lines update
+		tx, err := h.DB.Begin()
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+		}
+		defer tx.Rollback()
+
+		// Delete existing lines
+		_, err = tx.Exec(`DELETE FROM goods_receipt_lines WHERE receipt_id = $1`, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete existing lines")
+		}
+
+		// Create new lines
+		var total decimal.Decimal
+		for _, line := range req.Lines {
+			// Resolve or create item
+			var unitCostDecimal *decimal.Decimal
+			if line.UnitCost != "" {
+				cost, err := decimal.NewFromString(line.UnitCost)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusBadRequest, "Invalid unit cost format")
+				}
+				unitCostDecimal = &cost
+			}
+
+			resolvedItemID, resErr := h.resolveOrCreateItem(tx, line.ItemID, unitCostDecimal, tenantID)
+			if resErr != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
+			}
+
+			// Create receipt line
+			lineID := uuid.New().String()
+			var unitCostValue interface{}
+			if unitCostDecimal != nil {
+				unitCostValue = unitCostDecimal.StringFixed(2)
+			} else {
+				unitCostValue = nil
+			}
+			_, err = tx.Exec(`
+				INSERT INTO goods_receipt_lines (id, receipt_id, item_id, qty, unit_cost, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+			`, lineID, id, resolvedItemID, line.Qty, unitCostValue)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create receipt line")
+			}
+
+			// Add to total (only if unit cost is provided)
+			if unitCostDecimal != nil {
+				lineTotal := unitCostDecimal.Mul(decimal.NewFromInt(int64(line.Qty)))
+				total = total.Add(lineTotal)
+			}
+		}
+
+		// Update receipt total
+		_, err = tx.Exec(`UPDATE goods_receipts SET total = $1 WHERE id = $2`, total, id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update receipt total")
+		}
+
+		// Commit transaction
+		if err = tx.Commit(); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+		}
+
+		// Update the returned receipt with new total
+		out.Total = total
+	}
+
 	return c.JSON(http.StatusOK, out)
 }
 
 func (h *Handler) DeleteReceipt(c echo.Context) error {
 	id := c.Param("id")
-	res, err := h.DB.Exec(`DELETE FROM goods_receipts WHERE id = $1`, id)
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
+	res, err := h.DB.Exec(`DELETE FROM goods_receipts WHERE id = $1 AND tenant_id = $2`, id, tenantID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusConflict, "cannot delete receipt")
 	}
@@ -410,6 +602,13 @@ func (h *Handler) DeleteReceipt(c echo.Context) error {
 
 // Create receipt from Purchase Order remaining quantities
 func (h *Handler) CreateReceiptFromPO(c echo.Context) error {
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
 	var req struct {
 		PurchaseOrderNumber string  `json:"purchase_order_number"`
 		PurchaseOrderID     string  `json:"purchase_order_id"`
@@ -427,7 +626,7 @@ func (h *Handler) CreateReceiptFromPO(c echo.Context) error {
 	// Resolve PO id by number if provided
 	poID := strings.TrimSpace(req.PurchaseOrderID)
 	if poID == "" {
-		if err := h.DB.QueryRow(`SELECT id FROM purchase_orders WHERE number = $1`, strings.TrimSpace(req.PurchaseOrderNumber)).Scan(&poID); err != nil {
+		if err := h.DB.QueryRow(`SELECT id FROM purchase_orders WHERE number = $1 AND tenant_id = $2`, strings.TrimSpace(req.PurchaseOrderNumber), tenantID).Scan(&poID); err != nil {
 			if err == sql.ErrNoRows {
 				return echo.NewHTTPError(http.StatusNotFound, "purchase order not found")
 			}
@@ -437,7 +636,7 @@ func (h *Handler) CreateReceiptFromPO(c echo.Context) error {
 
 	// Load PO header
 	var supplierID sql.NullString
-	if err := h.DB.QueryRow(`SELECT supplier_id FROM purchase_orders WHERE id = $1`, poID).Scan(&supplierID); err != nil {
+	if err := h.DB.QueryRow(`SELECT supplier_id FROM purchase_orders WHERE id = $1 AND tenant_id = $2`, poID, tenantID).Scan(&supplierID); err != nil {
 		if err == sql.ErrNoRows {
 			return echo.NewHTTPError(http.StatusNotFound, "purchase order not found")
 		}
@@ -474,16 +673,16 @@ func (h *Handler) CreateReceiptFromPO(c echo.Context) error {
 
 	// Create receipt header
 	var maxNumber int
-	_ = h.DB.QueryRow(`SELECT COALESCE(MAX(CAST(SUBSTRING(number FROM 'GR-([0-9]+)') AS INTEGER)), 0) FROM goods_receipts WHERE number ~ '^GR-[0-9]+$'`).Scan(&maxNumber)
+	_ = h.DB.QueryRow(`SELECT COALESCE(MAX(CAST(SUBSTRING(number FROM 'GR-([0-9]+)') AS INTEGER)), 0) FROM goods_receipts WHERE number ~ '^GR-[0-9]+$' AND tenant_id = $1`, tenantID).Scan(&maxNumber)
 	number := fmt.Sprintf("GR-%06d", maxNumber+1)
 	id := uuid.New().String()
 	var out GoodsReceipt
 	var supplierOut, locationOut, reference, notes sql.NullString
 	if err := h.DB.QueryRow(`
-        INSERT INTO goods_receipts (id, number, supplier_id, location_id, status, reference, notes, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 'DRAFT', $5, $6, NOW(), NOW())
+        INSERT INTO goods_receipts (id, number, supplier_id, location_id, status, reference, notes, tenant_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 'DRAFT', $5, $6, $7, NOW(), NOW())
         RETURNING id, number, supplier_id, location_id, status, reference, notes, created_at, updated_at
-    `, id, number, supplierID, req.LocationID, req.Reference, req.Notes).Scan(&out.ID, &out.Number, &supplierOut, &locationOut, &out.Status, &reference, &notes, &out.CreatedAt, &out.UpdatedAt); err != nil {
+    `, id, number, supplierID, req.LocationID, req.Reference, req.Notes, tenantID).Scan(&out.ID, &out.Number, &supplierOut, &locationOut, &out.Status, &reference, &notes, &out.CreatedAt, &out.UpdatedAt); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 	}
 	if supplierOut.Valid {
@@ -514,7 +713,34 @@ func (h *Handler) CreateReceiptFromPO(c echo.Context) error {
 
 func (h *Handler) ListReceiptLines(c echo.Context) error {
 	receiptID := c.Param("id")
-	rows, err := h.DB.Query(`SELECT id, receipt_id, item_id, qty, unit_cost, created_at, updated_at FROM goods_receipt_lines WHERE receipt_id = $1 ORDER BY created_at ASC`, receiptID)
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
+	// Verify receipt belongs to tenant
+	var receiptExists bool
+	err := h.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM goods_receipts WHERE id = $1 AND tenant_id = $2)`, receiptID, tenantID).Scan(&receiptExists)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	if !receiptExists {
+		return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
+	}
+
+	rows, err := h.DB.Query(`
+		SELECT 
+			grl.id, grl.receipt_id, grl.item_id, grl.qty, grl.unit_cost, 
+			grl.created_at, grl.updated_at,
+			i.sku, i.name
+		FROM goods_receipt_lines grl
+		LEFT JOIN items i ON grl.item_id = i.id
+		WHERE grl.receipt_id = $1 
+		ORDER BY grl.created_at ASC
+	`, receiptID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 	}
@@ -522,8 +748,17 @@ func (h *Handler) ListReceiptLines(c echo.Context) error {
 	res := []GoodsReceiptLine{}
 	for rows.Next() {
 		var m GoodsReceiptLine
-		if err := rows.Scan(&m.ID, &m.ReceiptID, &m.ItemID, &m.Qty, &m.UnitCost, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		var sku, name sql.NullString
+		if err := rows.Scan(&m.ID, &m.ReceiptID, &m.ItemID, &m.Qty, &m.UnitCost, &m.CreatedAt, &m.UpdatedAt, &sku, &name); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "database scan error")
+		}
+		// Add item info if available
+		if sku.Valid || name.Valid {
+			m.Item = &Item{
+				ID:   m.ItemID,
+				SKU:  sku.String,
+				Name: name.String,
+			}
 		}
 		res = append(res, m)
 	}
@@ -532,6 +767,14 @@ func (h *Handler) ListReceiptLines(c echo.Context) error {
 
 func (h *Handler) AddReceiptLine(c echo.Context) error {
 	receiptID := c.Param("id")
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
 	var req struct {
 		ItemID   string `json:"item_id"`
 		Qty      int    `json:"qty"`
@@ -543,21 +786,73 @@ func (h *Handler) AddReceiptLine(c echo.Context) error {
 	if req.ItemID == "" || req.Qty <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "item_id and qty are required")
 	}
+
+	// Start transaction
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	defer tx.Rollback()
+
+	// Verify receipt belongs to tenant
+	var receiptExists bool
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM goods_receipts WHERE id = $1 AND tenant_id = $2)`, receiptID, tenantID).Scan(&receiptExists)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	if !receiptExists {
+		return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
+	}
+
+	// Resolve or create item (similar to purchase orders)
+	var unitCostDecimal *decimal.Decimal
+	if req.UnitCost != "" {
+		cost, err := decimal.NewFromString(req.UnitCost)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid unit cost format")
+		}
+		unitCostDecimal = &cost
+	}
+	resolvedItemID, resErr := h.resolveOrCreateItem(tx, req.ItemID, unitCostDecimal, tenantID)
+	if resErr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
+	}
+
 	id := uuid.New().String()
+	var unitCostValue interface{}
+	if req.UnitCost != "" {
+		unitCostValue = req.UnitCost
+	} else {
+		unitCostValue = nil
+	}
 	var out GoodsReceiptLine
-	if err := h.DB.QueryRow(`
+	if err := tx.QueryRow(`
         INSERT INTO goods_receipt_lines (id, receipt_id, item_id, qty, unit_cost, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5::numeric, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
         RETURNING id, receipt_id, item_id, qty, unit_cost, created_at, updated_at
-    `, id, receiptID, req.ItemID, req.Qty, req.UnitCost).Scan(&out.ID, &out.ReceiptID, &out.ItemID, &out.Qty, &out.UnitCost, &out.CreatedAt, &out.UpdatedAt); err != nil {
+    `, id, receiptID, resolvedItemID, req.Qty, unitCostValue).Scan(&out.ID, &out.ReceiptID, &out.ItemID, &out.Qty, &out.UnitCost, &out.CreatedAt, &out.UpdatedAt); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
 	return c.JSON(http.StatusCreated, out)
 }
 
 func (h *Handler) UpdateReceiptLine(c echo.Context) error {
 	receiptID := c.Param("id")
 	lineID := c.Param("line_id")
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
 	var req struct {
 		Qty      *int    `json:"qty"`
 		UnitCost *string `json:"unit_cost"`
@@ -565,6 +860,17 @@ func (h *Handler) UpdateReceiptLine(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
+
+	// Verify receipt belongs to tenant
+	var receiptExists bool
+	err := h.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM goods_receipts WHERE id = $1 AND tenant_id = $2)`, receiptID, tenantID).Scan(&receiptExists)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	if !receiptExists {
+		return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
+	}
+
 	sets := []string{}
 	args := []interface{}{}
 	i := 1
@@ -597,6 +903,24 @@ func (h *Handler) UpdateReceiptLine(c echo.Context) error {
 func (h *Handler) DeleteReceiptLine(c echo.Context) error {
 	receiptID := c.Param("id")
 	lineID := c.Param("line_id")
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
+
+	// Verify receipt belongs to tenant
+	var receiptExists bool
+	err := h.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM goods_receipts WHERE id = $1 AND tenant_id = $2)`, receiptID, tenantID).Scan(&receiptExists)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	if !receiptExists {
+		return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
+	}
+
 	res, err := h.DB.Exec(`DELETE FROM goods_receipt_lines WHERE id = $1 AND receipt_id = $2`, lineID, receiptID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusConflict, "cannot delete line")
@@ -611,6 +935,13 @@ func (h *Handler) DeleteReceiptLine(c echo.Context) error {
 // GetReceipt retrieves a single receipt with all details including lines
 func (h *Handler) GetReceipt(c echo.Context) error {
 	id := c.Param("id")
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	tenantID := claims.TenantID
 
 	// Get receipt header
 	var gr GoodsReceipt
@@ -629,8 +960,8 @@ func (h *Handler) GetReceipt(c echo.Context) error {
 		FROM goods_receipts gr
 		LEFT JOIN suppliers s ON gr.supplier_id = s.id
 		LEFT JOIN locations l ON gr.location_id = l.id
-		WHERE gr.id = $1
-	`, id).Scan(
+		WHERE gr.id = $1 AND gr.tenant_id = $2
+	`, id, tenantID).Scan(
 		&gr.ID, &gr.Number, &gr.Status, &gr.SupplierID, &gr.LocationID, &gr.CreatedBy,
 		&approvedBy, &postedBy, &approvedAt, &postedAt, &reference, &notes,
 		&gr.CreatedAt, &gr.UpdatedAt, &supplierName, &locationName, &locationCode,
@@ -746,7 +1077,7 @@ func (h *Handler) ApproveReceipt(c echo.Context) error {
 
 	// Check if receipt exists and is in DRAFT status
 	var currentStatus string
-	err := h.DB.QueryRow("SELECT status FROM goods_receipts WHERE id = $1", id).Scan(&currentStatus)
+	err := h.DB.QueryRow("SELECT status FROM goods_receipts WHERE id = $1 AND tenant_id = $2", id, claims.TenantID).Scan(&currentStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
@@ -762,8 +1093,8 @@ func (h *Handler) ApproveReceipt(c echo.Context) error {
 	_, err = h.DB.Exec(`
 		UPDATE goods_receipts 
 		SET status = 'APPROVED', approved_by = $1, approved_at = NOW(), updated_at = NOW()
-		WHERE id = $2
-	`, userID, id)
+		WHERE id = $2 AND tenant_id = $3
+	`, userID, id, claims.TenantID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to approve receipt")
 	}
@@ -785,7 +1116,7 @@ func (h *Handler) PostReceipt(c echo.Context) error {
 	// Check if receipt exists and is in APPROVED status
 	var currentStatus string
 	var locationID sql.NullString
-	err := h.DB.QueryRow("SELECT status, location_id FROM goods_receipts WHERE id = $1", id).Scan(&currentStatus, &locationID)
+	err := h.DB.QueryRow("SELECT status, location_id FROM goods_receipts WHERE id = $1 AND tenant_id = $2", id, claims.TenantID).Scan(&currentStatus, &locationID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
@@ -860,8 +1191,8 @@ func (h *Handler) PostReceipt(c echo.Context) error {
 	_, err = tx.Exec(`
 		UPDATE goods_receipts 
 		SET status = 'POSTED', posted_by = $1, posted_at = NOW(), updated_at = NOW()
-		WHERE id = $2
-	`, userID, id)
+		WHERE id = $2 AND tenant_id = $3
+	`, userID, id, claims.TenantID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to post receipt")
 	}
@@ -880,9 +1211,15 @@ func (h *Handler) PostReceipt(c echo.Context) error {
 func (h *Handler) CloseReceipt(c echo.Context) error {
 	id := c.Param("id")
 
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+
 	// Check if receipt exists and can be closed
 	var currentStatus string
-	err := h.DB.QueryRow("SELECT status FROM goods_receipts WHERE id = $1", id).Scan(&currentStatus)
+	err := h.DB.QueryRow("SELECT status FROM goods_receipts WHERE id = $1 AND tenant_id = $2", id, claims.TenantID).Scan(&currentStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return echo.NewHTTPError(http.StatusNotFound, "Receipt not found")
@@ -898,8 +1235,8 @@ func (h *Handler) CloseReceipt(c echo.Context) error {
 	_, err = h.DB.Exec(`
 		UPDATE goods_receipts 
 		SET status = 'CLOSED', updated_at = NOW()
-		WHERE id = $1
-	`, id)
+		WHERE id = $1 AND tenant_id = $2
+	`, id, claims.TenantID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to close receipt")
 	}

@@ -64,6 +64,66 @@ func main() {
 		log.Println("password_hash made optional successfully")
 	}
 
+	// Add tenant_id to transfers table
+	log.Println("Adding tenant_id to transfers table...")
+	_, err = db.Exec(`
+		ALTER TABLE transfers
+		ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add tenant_id to transfers: %v", err)
+	} else {
+		log.Println("tenant_id added to transfers successfully")
+	}
+
+	// Add tenant_id to transfer_lines table
+	log.Println("Adding tenant_id to transfer_lines table...")
+	_, err = db.Exec(`
+		ALTER TABLE transfer_lines
+		ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add tenant_id to transfer_lines: %v", err)
+	} else {
+		log.Println("tenant_id added to transfer_lines successfully")
+	}
+
+	// Add item_identifier to transfer_lines table for non-existent items
+	log.Println("Adding item_identifier to transfer_lines table...")
+	_, err = db.Exec(`
+		ALTER TABLE transfer_lines
+		ADD COLUMN IF NOT EXISTS item_identifier VARCHAR(255)
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add item_identifier to transfer_lines: %v", err)
+	} else {
+		log.Println("item_identifier added to transfer_lines successfully")
+	}
+
+	// Make item_id nullable for transfer_lines
+	log.Println("Making item_id nullable in transfer_lines table...")
+	_, err = db.Exec(`
+		ALTER TABLE transfer_lines
+		ALTER COLUMN item_id DROP NOT NULL
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to make item_id nullable: %v", err)
+	} else {
+		log.Println("item_id made nullable in transfer_lines successfully")
+	}
+
+	// Add description field to transfer_lines
+	log.Println("Adding description to transfer_lines table...")
+	_, err = db.Exec(`
+		ALTER TABLE transfer_lines
+		ADD COLUMN IF NOT EXISTS description TEXT
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add description to transfer_lines: %v", err)
+	} else {
+		log.Println("description added to transfer_lines successfully")
+	}
+
 	fmt.Println("Database migration completed successfully!")
 }
 
@@ -212,7 +272,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			receipt_id UUID NOT NULL REFERENCES goods_receipts(id) ON DELETE CASCADE,
 			item_id UUID NOT NULL REFERENCES items(id),
 			qty INTEGER NOT NULL CHECK (qty > 0),
-			unit_cost NUMERIC(10,2) NOT NULL DEFAULT 0,
+			unit_cost NUMERIC(10,2) DEFAULT NULL,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
@@ -223,6 +283,7 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			number VARCHAR(255) UNIQUE NOT NULL,
 			from_location_id UUID NOT NULL REFERENCES locations(id),
 			to_location_id UUID NOT NULL REFERENCES locations(id),
+			tenant_id UUID REFERENCES tenants(id),
 			status VARCHAR(50) DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'IN_TRANSIT', 'RECEIVED', 'CANCELED')),
 			notes TEXT,
 			created_by UUID REFERENCES users(id),
@@ -238,7 +299,9 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS transfer_lines (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			transfer_id UUID NOT NULL REFERENCES transfers(id) ON DELETE CASCADE,
-			item_id UUID NOT NULL REFERENCES items(id),
+			item_id UUID REFERENCES items(id),
+			item_identifier VARCHAR(255),
+			tenant_id UUID REFERENCES tenants(id),
 			qty INTEGER NOT NULL CHECK (qty > 0),
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -249,7 +312,8 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			number VARCHAR(255) UNIQUE NOT NULL,
 			location_id UUID NOT NULL REFERENCES locations(id),
-			reason VARCHAR(50) NOT NULL CHECK (reason IN ('COUNT', 'DAMAGE', 'CORRECTION')),
+			tenant_id UUID REFERENCES tenants(id),
+			reason VARCHAR(50) NOT NULL CHECK (reason IN ('COUNT', 'DAMAGE', 'CORRECTION', 'EXPIRY', 'THEFT', 'OTHER')),
 			status VARCHAR(50) DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'APPROVED', 'CANCELED')),
 			notes TEXT,
 			created_by UUID REFERENCES users(id),
@@ -263,8 +327,13 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS adjustment_lines (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			adjustment_id UUID NOT NULL REFERENCES adjustments(id) ON DELETE CASCADE,
-			item_id UUID NOT NULL REFERENCES items(id),
+			item_id UUID REFERENCES items(id),
+			item_identifier VARCHAR(255),
+			tenant_id UUID REFERENCES tenants(id),
+			qty_expected INTEGER NOT NULL DEFAULT 0,
+			qty_actual INTEGER NOT NULL DEFAULT 0,
 			qty_diff INTEGER NOT NULL,
+			notes TEXT,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
@@ -331,6 +400,10 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("failed to migrate goods receipts: %w", err)
 	}
 
+	if err := migrateAdjustments(ctx, db); err != nil {
+		return fmt.Errorf("failed to migrate adjustments: %w", err)
+	}
+
 	return nil
 }
 
@@ -370,5 +443,81 @@ func migrateGoodsReceipts(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	// Migrate goods_receipt_lines to make unit_cost nullable
+	if err := migrateGoodsReceiptLines(ctx, db); err != nil {
+		return fmt.Errorf("failed to migrate goods receipt lines: %w", err)
+	}
+
+	return nil
+}
+
+func migrateGoodsReceiptLines(ctx context.Context, db *sql.DB) error {
+	// Check if unit_cost column is already nullable
+	var isNullable string
+	err := db.QueryRowContext(ctx, `
+		SELECT is_nullable FROM information_schema.columns 
+		WHERE table_name = 'goods_receipt_lines' AND column_name = 'unit_cost'
+	`).Scan(&isNullable)
+	if err != nil {
+		return fmt.Errorf("failed to check unit_cost column: %w", err)
+	}
+
+	if isNullable == "NO" {
+		// Make unit_cost nullable
+		if _, err := db.ExecContext(ctx, `ALTER TABLE goods_receipt_lines ALTER COLUMN unit_cost DROP NOT NULL`); err != nil {
+			return fmt.Errorf("failed to make unit_cost nullable: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func migrateAdjustments(ctx context.Context, db *sql.DB) error {
+	log.Println("Migrating adjustments table...")
+
+	// Add tenant_id to adjustments table if not exists
+	_, err := db.ExecContext(ctx, `
+		ALTER TABLE adjustments
+		ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add tenant_id to adjustments: %v", err)
+	}
+
+	// Update reason check constraint to include new values
+	_, err = db.ExecContext(ctx, `
+		ALTER TABLE adjustments
+		DROP CONSTRAINT IF EXISTS adjustments_reason_check
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to drop old reason constraint: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		ALTER TABLE adjustments
+		ADD CONSTRAINT adjustments_reason_check
+		CHECK (reason IN ('COUNT', 'DAMAGE', 'CORRECTION', 'EXPIRY', 'THEFT', 'OTHER'))
+	`)
+	if err != nil {
+		log.Printf("Warning: Failed to add new reason constraint: %v", err)
+	}
+
+	// Add new columns to adjustment_lines table
+	alterQueries := []string{
+		"ALTER TABLE adjustment_lines ADD COLUMN IF NOT EXISTS item_identifier VARCHAR(255)",
+		"ALTER TABLE adjustment_lines ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)",
+		"ALTER TABLE adjustment_lines ADD COLUMN IF NOT EXISTS qty_expected INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE adjustment_lines ADD COLUMN IF NOT EXISTS qty_actual INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE adjustment_lines ADD COLUMN IF NOT EXISTS notes TEXT",
+	}
+
+	for _, query := range alterQueries {
+		_, err = db.ExecContext(ctx, query)
+		if err != nil {
+			log.Printf("Warning: Failed to execute: %s - %v", query, err)
+		}
+	}
+
+	log.Println("Adjustments migration completed")
 	return nil
 }
