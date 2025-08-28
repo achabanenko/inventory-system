@@ -1,0 +1,1 @@
+please read and analize backend and frontend folders to find is any files or functions in code no used and siggest list for me to remove
