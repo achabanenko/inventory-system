@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,7 +78,7 @@ func (h *Handler) Login(c echo.Context) error {
 	// Query user from database with optional tenant filtering
 	var userID, tenantID, tenantName, tenantSlug, hashedPassword, name, role string
 	var isActive bool
-	var oauthProvider string
+	var oauthProvider sql.NullString
 
 	var query string
 	var args []interface{}
@@ -112,8 +113,8 @@ func (h *Handler) Login(c echo.Context) error {
 	}
 
 	// Check if user is an OAuth user (no password)
-	if oauthProvider != "" {
-		log.Error().Str("email", req.Email).Str("oauth_provider", oauthProvider).Msg("OAuth user attempting traditional login")
+	if oauthProvider.Valid && oauthProvider.String != "" {
+		log.Error().Str("email", req.Email).Str("oauth_provider", oauthProvider.String).Msg("OAuth user attempting traditional login")
 		return echo.NewHTTPError(http.StatusUnauthorized, "this account uses Google OAuth. Please sign in with Google instead.")
 	}
 

@@ -1,0 +1,18 @@
+export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic export ANTHROPIC_AUTH_TOKEN=sk-fefc5dc6f58a419dbfc3c19421a5ad70 export ANTHROPIC_MODEL=deepseek-chat export ANTHROPIC_SMALL_FAST_MODEL=deepseek-chat
+ claude
+  can we create flutter mobile application to use our inventory backend,  
+│ please create plan and make flutter application with nice professional interface
+the key functions:
+ ** find item by coode, description **
+ ** allow find item by scanning barcode using camera **
+   add AI chat using OpenAI compartable model connection, in the chat user can :
+   ** find item to check price and stock level
+   ** find supplier
+   ** find any type of used documents
+- to cover all our backend api documents - create/update/delete, add item, udate item, delete item etc
+ - to manage suppliers, warehouses
+ - Use nice and professional modern flutter interface
+ - add setting to manager application settings
+
+
+unset ANTHROPIC_BASE_URL unset ANTHROPIC_AUTH_TOKEN unset ANTHROPIC_MODEL unset ANTHROPIC_SMALL_FAST_MODEL

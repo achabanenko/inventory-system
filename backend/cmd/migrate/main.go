@@ -143,9 +143,13 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS users (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			email VARCHAR(255) UNIQUE NOT NULL,
-			password_hash VARCHAR(255) NOT NULL,
+			password_hash VARCHAR(255),
 			name VARCHAR(255) NOT NULL,
 			role VARCHAR(50) NOT NULL CHECK (role IN ('ADMIN', 'MANAGER', 'CLERK')),
+			tenant_id UUID REFERENCES tenants(id),
+			oauth_provider VARCHAR(50),
+			oauth_id VARCHAR(255),
+			avatar_url TEXT,
 			is_active BOOLEAN DEFAULT TRUE,
 			last_login TIMESTAMP WITH TIME ZONE,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -404,6 +408,10 @@ func createSchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("failed to migrate adjustments: %w", err)
 	}
 
+	if err := migrateUserOAuth(ctx, db); err != nil {
+		return fmt.Errorf("failed to migrate user OAuth fields: %w", err)
+	}
+
 	return nil
 }
 
@@ -519,5 +527,27 @@ func migrateAdjustments(ctx context.Context, db *sql.DB) error {
 	}
 
 	log.Println("Adjustments migration completed")
+	return nil
+}
+
+func migrateUserOAuth(ctx context.Context, db *sql.DB) error {
+	log.Println("Migrating user OAuth fields...")
+
+	alterQueries := []string{
+		"ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_provider VARCHAR(50)",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_id VARCHAR(255)",
+		"ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT",
+	}
+
+	for _, query := range alterQueries {
+		_, err := db.ExecContext(ctx, query)
+		if err != nil {
+			log.Printf("Warning: Failed to execute: %s - %v", query, err)
+		}
+	}
+
+	log.Println("User OAuth migration completed")
 	return nil
 }
