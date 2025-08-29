@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../services/auth_service.dart';
+import '../services/secure_auth_service.dart';
 import 'items_screen.dart';
 import 'barcode_scanner_screen.dart';
 import 'chat_screen.dart';
@@ -25,7 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final authService = Provider.of<AuthService>(context);
+    final authService = Provider.of<SecureAuthService>(context);
     final user = authService.user;
 
     return Scaffold(
@@ -124,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                Provider.of<AuthService>(context, listen: false).logout();
+                Provider.of<SecureAuthService>(context, listen: false).logout();
               },
               child: const Text('Logout'),
             ),

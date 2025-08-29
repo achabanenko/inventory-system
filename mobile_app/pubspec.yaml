@@ -41,6 +41,13 @@ dependencies:
   dio: ^5.9.0
   flutter_barcode_scanner: ^2.0.0
 
+  # Secure storage and biometric authentication
+  flutter_secure_storage: ^9.0.0
+  local_auth: ^2.1.7
+  local_auth_android: ^1.0.52
+  local_auth_darwin: ^1.6.0
+  local_auth_platform_interface: ^1.0.10
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

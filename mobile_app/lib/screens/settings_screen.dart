@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/auth_service.dart';
+import '../services/secure_auth_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,7 +14,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _serverUrl = 'http://localhost:8080/api/v1';
   bool _notificationsEnabled = true;
   String _selectedTheme = 'system';
-  bool _biometricEnabled = false;
 
   @override
   void initState() {
@@ -28,7 +27,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _serverUrl = prefs.getString('server_url') ?? 'http://localhost:8080/api/v1';
       _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
       _selectedTheme = prefs.getString('theme') ?? 'system';
-      _biometricEnabled = prefs.getBool('biometric_enabled') ?? false;
     });
   }
 
@@ -37,12 +35,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setString('server_url', _serverUrl);
     await prefs.setBool('notifications_enabled', _notificationsEnabled);
     await prefs.setString('theme', _selectedTheme);
-    await prefs.setBool('biometric_enabled', _biometricEnabled);
   }
 
   @override
   Widget build(BuildContext context) {
-    final authService = Provider.of<AuthService>(context);
+    final authService = Provider.of<SecureAuthService>(context);
     final user = authService.user;
 
     return Scaffold(
@@ -185,12 +182,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   secondary: const Icon(Icons.fingerprint),
                   title: const Text('Biometric Authentication'),
                   subtitle: const Text('Use fingerprint or face ID'),
-                  value: _biometricEnabled,
+                  value: authService.biometricEnabled,
                   onChanged: (value) {
-                    setState(() {
-                      _biometricEnabled = value;
-                    });
-                    _saveSettings();
+                    authService.setBiometricEnabled(value);
                   },
                 ),
               ],
@@ -475,7 +469,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              Provider.of<AuthService>(context, listen: false).logout();
+              Provider.of<SecureAuthService>(context, listen: false).logout();
             },
             child: const Text('Sign Out'),
           ),

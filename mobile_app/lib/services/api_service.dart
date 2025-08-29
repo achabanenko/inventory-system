@@ -4,7 +4,8 @@ import '../models/user.dart';
 import '../models/item.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
+  static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
+  // static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
   String? _token;
   Function? _onTokenExpired;
 

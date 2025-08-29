@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'services/auth_service.dart';
+import 'services/secure_auth_service.dart';
 import 'services/api_service.dart';
-import 'screens/login_screen.dart';
-import 'screens/home_screen.dart';
+import 'widgets/auth_wrapper.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -17,9 +16,12 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // API Service provider
         Provider(create: (context) => ApiService()),
-        ChangeNotifierProxyProvider<ApiService, AuthService>(
-          create: (context) => AuthService(),
+
+        // Secure Authentication Service provider
+        ChangeNotifierProxyProvider<ApiService, SecureAuthService>(
+          create: (context) => SecureAuthService(),
           update: (context, apiService, authService) {
             authService!.setApiService(apiService);
             return authService;
@@ -31,13 +33,9 @@ class MyApp extends StatelessWidget {
         theme: AppTheme.lightTheme,
         darkTheme: AppTheme.darkTheme,
         themeMode: ThemeMode.system,
-        home: Consumer<AuthService>(
-          builder: (context, authService, child) {
-            return authService.isAuthenticated 
-                ? const HomeScreen() 
-                : const LoginScreen();
-          },
-        ),
+        // Use AuthWrapper to handle the authentication flow
+        home: const AuthWrapper(),
+        debugShowCheckedModeBanner: false,
       ),
     );
   }
