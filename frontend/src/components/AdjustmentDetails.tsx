@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import {
@@ -18,7 +18,6 @@ export function AdjustmentDetails() {
   const [adjustment, setAdjustment] = useState<Adjustment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -49,7 +48,7 @@ export function AdjustmentDetails() {
     setFormOpen(false);
   };
 
-  const handleFormSubmit = async (data: any) => {
+  const handleFormSubmit = async () => {
     // This will be handled by the parent Adjustments component
     // For now, just close the form and reload
     setFormOpen(false);
@@ -302,7 +301,7 @@ export function AdjustmentDetails() {
           adjustment={adjustment}
           onClose={handleFormClose}
           onSubmit={handleFormSubmit}
-          isSubmitting={isSubmitting}
+          isSubmitting={false}
         />
       )}
     </div>
