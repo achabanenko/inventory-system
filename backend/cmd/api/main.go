@@ -186,6 +186,7 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 	purchaseOrders.POST("/:id/receive", h.ReceivePurchaseOrder)
 	purchaseOrders.POST("/:id/close", h.ClosePurchaseOrder)
 	purchaseOrders.POST("/:id/items", h.AddItemToPurchaseOrder)
+	purchaseOrders.DELETE("/:id/items/:line_id", h.DeletePurchaseOrderLine)
 
 	transfers := api.Group("/transfers")
 	transfers.Use(middleware.JWT(h.Config.JWTSecret))

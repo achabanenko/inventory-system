@@ -1041,3 +1041,43 @@ func (h *Handler) DeletePurchaseOrder(c echo.Context) error {
 
 	return c.NoContent(http.StatusNoContent)
 }
+
+func (h *Handler) DeletePurchaseOrderLine(c echo.Context) error {
+	poID := c.Param("id")
+	lineID := c.Param("line_id")
+
+	// Check if purchase order exists and is in DRAFT status
+	var currentStatus string
+	err := h.DB.QueryRow("SELECT status FROM purchase_orders WHERE id = $1", poID).Scan(&currentStatus)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return echo.NewHTTPError(http.StatusNotFound, "Purchase order not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	if currentStatus != "DRAFT" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Can only delete items from purchase orders in DRAFT status")
+	}
+
+	// Check if the line exists and belongs to this purchase order
+	var existingLineID string
+	err = h.DB.QueryRow(`
+		SELECT id FROM purchase_order_lines 
+		WHERE id = $1 AND purchase_order_id = $2
+	`, lineID, poID).Scan(&existingLineID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return echo.NewHTTPError(http.StatusNotFound, "Purchase order line not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	// Delete the purchase order line
+	_, err = h.DB.Exec("DELETE FROM purchase_order_lines WHERE id = $1", lineID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete purchase order line")
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}

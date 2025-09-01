@@ -8,7 +8,8 @@ import '../models/purchase_order.dart';
 import 'cache_service.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
+  static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
+  // static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
   // static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
   // static const String baseUrl = 'http://localhost:8080/api/v1';
   String? _token;
@@ -576,6 +577,32 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Failed to add item to purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> removeItemFromPurchaseOrder(String poId, String lineId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/purchase-orders/$poId/items/$lineId'),
+      headers: _headers,
+    );
+
+    if (response.statusCode != 204 && response.statusCode != 200) {
+      throw Exception('Failed to remove item from purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> updatePurchaseOrderLine(String poId, String lineId, int quantity, double unitCost) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/purchase-orders/$poId/items/$lineId'),
+      headers: _headers,
+      body: jsonEncode({
+        'qty_ordered': quantity,
+        'unit_cost': unitCost.toStringAsFixed(2),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to update purchase order line: ${response.body}');
     }
   }
 }

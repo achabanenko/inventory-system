@@ -27,7 +27,14 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
   void initState() {
     super.initState();
     controller = MobileScannerController(
-      formats: [BarcodeFormat.all],
+      formats: [
+        BarcodeFormat.ean13,    // Standard UPC/EAN barcodes (most common)
+        BarcodeFormat.ean8,     // Short EAN barcodes
+        BarcodeFormat.upcA,     // UPC-A barcodes
+        BarcodeFormat.upcE,     // UPC-E barcodes (compact)
+        BarcodeFormat.code128,  // Code 128 (common for logistics)
+        BarcodeFormat.code39,   // Code 39 (less common but still used)
+      ],
       facing: CameraFacing.back,
       torchEnabled: false,
     );
@@ -54,8 +61,10 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
     
     final List<Barcode> barcodes = capture.barcodes;
     if (barcodes.isNotEmpty) {
-      final String? code = barcodes.first.rawValue;
-      if (code != null && code.isNotEmpty) {
+      final Barcode barcode = barcodes.first;
+      final String? code = barcode.rawValue;
+      
+      if (code != null && code.isNotEmpty && _isValidProductBarcode(code, barcode.format)) {
         setState(() {
           hasScanned = true;
         });
@@ -66,6 +75,52 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
         widget.onBarcodeScanned(code);
       }
     }
+  }
+
+  /// Validate that the scanned code is a proper product barcode
+  bool _isValidProductBarcode(String code, BarcodeFormat format) {
+    // Remove any whitespace
+    code = code.trim();
+    
+    // Reject obviously invalid codes
+    if (code.isEmpty || code.length < 4) {
+      return false;
+    }
+    
+    // Check basic length requirements for different formats
+    switch (format) {
+      case BarcodeFormat.ean13:
+        return code.length == 13 && _isNumeric(code);
+      case BarcodeFormat.ean8:
+        return code.length == 8 && _isNumeric(code);
+      case BarcodeFormat.upcA:
+        return code.length == 12 && _isNumeric(code);
+      case BarcodeFormat.upcE:
+        return code.length == 8 && _isNumeric(code);
+      case BarcodeFormat.code128:
+        // Code 128 can contain alphanumeric characters, typical length 6-20
+        return code.length >= 6 && code.length <= 20 && _isAlphanumeric(code);
+      case BarcodeFormat.code39:
+        // Code 39 can contain alphanumeric + some symbols, typical length 6-20
+        return code.length >= 6 && code.length <= 20 && _isValidCode39(code);
+      default:
+        return false;
+    }
+  }
+
+  /// Check if string contains only numeric characters
+  bool _isNumeric(String str) {
+    return RegExp(r'^[0-9]+$').hasMatch(str);
+  }
+
+  /// Check if string contains only alphanumeric characters
+  bool _isAlphanumeric(String str) {
+    return RegExp(r'^[a-zA-Z0-9]+$').hasMatch(str);
+  }
+
+  /// Check if string is valid Code 39 format (alphanumeric + space, dash, period, etc.)
+  bool _isValidCode39(String str) {
+    return RegExp(r'^[A-Z0-9\-. $/+%]+$').hasMatch(str);
   }
 
   @override

@@ -366,7 +366,7 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     }
   }
 
-  void _removeLine(int index) {
+  void _removeLine(int index) async {
     final line = _lines[index];
     showDialog(
       context: context,
@@ -379,15 +379,9 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              setState(() {
-                _lines.removeAt(index);
-                _hasChanges = true;
-              });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Removed ${line.itemName} from order')),
-              );
+              await _removeItemFromPurchaseOrder(index, line);
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Remove'),
@@ -395,6 +389,87 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _removeItemFromPurchaseOrder(int index, PurchaseOrderLine line) async {
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      
+      // Show loading indicator
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              ),
+              SizedBox(width: 12),
+              Text('Removing item...'),
+            ],
+          ),
+          duration: Duration(seconds: 30),
+        ),
+      );
+
+      // Call API to delete specific line item
+      await apiService.removeItemFromPurchaseOrder(widget.purchaseOrder.id, line.id);
+      
+      // Update local state on successful API call
+      setState(() {
+        _lines.removeAt(index);
+        _hasChanges = true;
+      });
+
+      // Hide loading indicator and show success message
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Removed ${line.itemName} from order'),
+          backgroundColor: Colors.green,
+          action: SnackBarAction(
+            label: 'Undo',
+            textColor: Colors.white,
+            onPressed: () async {
+              try {
+                // Re-add item to purchase order
+                await apiService.addItemToPurchaseOrder(
+                  widget.purchaseOrder.id, 
+                  line.itemId, 
+                  line.qtyOrdered, 
+                  line.unitCost
+                );
+                
+                // Refresh the purchase order to get updated data
+                await _refreshPurchaseOrder();
+                
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Restored ${line.itemName} to order')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to restore item: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+          ),
+        ),
+      );
+
+    } catch (e) {
+      // Hide loading indicator and show error
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to remove item: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   void _editQuantity(int index) {
@@ -817,31 +892,11 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
                                             );
                                           }
                                         } : null,
-                                        onDismissed: canEdit ? (direction) {
+                                        onDismissed: canEdit ? (direction) async {
                                           if (direction == DismissDirection.endToStart) {
-                                            // Only handle delete dismissal
-                                            setState(() {
-                                              _lines.removeAt(index);
-                                              _hasChanges = true;
-                                            });
+                                            // Only handle delete dismissal - use API integration
+                                            await _removeItemFromPurchaseOrder(index, line);
                                             HapticFeedback.lightImpact();
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('Removed ${line.itemName} from order'),
-                                                backgroundColor: Colors.red,
-                                                action: SnackBarAction(
-                                                  label: 'Undo',
-                                                  textColor: Colors.white,
-                                                  onPressed: () {
-                                                    setState(() {
-                                                      _lines.insert(index, line);
-                                                      _hasChanges = true;
-                                                    });
-                                                    HapticFeedback.lightImpact();
-                                                  },
-                                                ),
-                                              ),
-                                            );
                                           }
                                         } : null,
                                         child: Card(

@@ -118,6 +118,7 @@ class _ExpandableFabState extends State<ExpandableFab>
       animation: _expandAnimation,
       builder: (context, child) {
         return FloatingActionButton(
+          heroTag: "expandable_fab_main",
           onPressed: _toggle,
           child: AnimatedRotation(
             turns: _open ? 0.125 : 0.0, // 45 degrees rotation when open
