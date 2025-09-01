@@ -40,45 +40,48 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // Token storage (in memory, with configurable persistence)
 class TokenManager {
   private accessToken: string | null = null;
+  private refreshTokenValue: string | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private persistentMode: boolean = false; // Whether to use localStorage or sessionStorage
 
   constructor() {
     // First try to load from localStorage (persistent across browser sessions)
-    const persistentStored = localStorage.getItem('auth_token');
+    const persistentStored = localStorage.getItem('auth_tokens');
     if (persistentStored) {
       try {
         const data = JSON.parse(persistentStored);
-        if (data.token && isValidJWT(data.token) && !isTokenExpired(data.token)) {
-          this.accessToken = data.token;
+        if (data.accessToken && isValidJWT(data.accessToken) && !isTokenExpired(data.accessToken)) {
+          this.accessToken = data.accessToken;
+          this.refreshTokenValue = data.refreshToken || null;
           this.persistentMode = true;
           console.log('Restored persistent authentication from localStorage');
           return;
         } else {
           // Invalid or expired token in localStorage, remove it
-          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_tokens');
           localStorage.removeItem('auth_user');
         }
       } catch (error) {
-        console.error('Failed to restore token from localStorage:', error);
-        localStorage.removeItem('auth_token');
+        console.error('Failed to restore tokens from localStorage:', error);
+        localStorage.removeItem('auth_tokens');
         localStorage.removeItem('auth_user');
       }
     }
 
     // Fallback to sessionStorage (current session only)
-    const sessionStored = sessionStorage.getItem('auth_token');
+    const sessionStored = sessionStorage.getItem('auth_tokens');
     if (sessionStored) {
       try {
         const data = JSON.parse(sessionStored);
-        if (data.token && isValidJWT(data.token) && !isTokenExpired(data.token)) {
-          this.accessToken = data.token;
+        if (data.accessToken && isValidJWT(data.accessToken) && !isTokenExpired(data.accessToken)) {
+          this.accessToken = data.accessToken;
+          this.refreshTokenValue = data.refreshToken || null;
           this.persistentMode = false;
           console.log('Restored session authentication from sessionStorage');
         }
       } catch (error) {
-        console.error('Failed to restore token from sessionStorage:', error);
-        sessionStorage.removeItem('auth_token');
+        console.error('Failed to restore tokens from sessionStorage:', error);
+        sessionStorage.removeItem('auth_tokens');
         sessionStorage.removeItem('auth_user');
       }
     }
@@ -88,38 +91,53 @@ class TokenManager {
     return this.accessToken;
   }
 
-  setAccessToken(token: string | null, persistent: boolean = false): void {
-    this.accessToken = token;
+  getRefreshToken(): string | null {
+    return this.refreshTokenValue;
+  }
+
+  setTokens(accessToken: string | null, refreshToken: string | null, persistent: boolean = false): void {
+    this.accessToken = accessToken;
+    this.refreshTokenValue = refreshToken;
     this.persistentMode = persistent;
 
-    if (token) {
+    if (accessToken) {
       const tokenData = JSON.stringify({
-        token,
+        accessToken,
+        refreshToken,
         timestamp: Date.now(),
       });
 
       if (persistent) {
         // Store in localStorage for persistence across browser sessions
-        localStorage.setItem('auth_token', tokenData);
+        localStorage.setItem('auth_tokens', tokenData);
         // Also clear any session storage to avoid conflicts
-        sessionStorage.removeItem('auth_token');
-        console.log('Token stored persistently in localStorage');
+        sessionStorage.removeItem('auth_tokens');
+        console.log('Tokens stored persistently in localStorage');
       } else {
         // Store in sessionStorage for current session only
-        sessionStorage.setItem('auth_token', tokenData);
+        sessionStorage.setItem('auth_tokens', tokenData);
         // Clear localStorage to avoid conflicts
-        localStorage.removeItem('auth_token');
-        console.log('Token stored in sessionStorage for current session');
+        localStorage.removeItem('auth_tokens');
+        console.log('Tokens stored in sessionStorage for current session');
       }
     } else {
       // Clear from both storages
-      sessionStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_token');
+      sessionStorage.removeItem('auth_tokens');
+      localStorage.removeItem('auth_tokens');
     }
+  }
+
+  // Legacy method for backward compatibility
+  setAccessToken(token: string | null, persistent: boolean = false): void {
+    this.setTokens(token, this.refreshTokenValue, persistent);
   }
 
   clearTokens(): void {
     this.accessToken = null;
+    this.refreshTokenValue = null;
+    sessionStorage.removeItem('auth_tokens');
+    localStorage.removeItem('auth_tokens');
+    // Also clean up old format
     sessionStorage.removeItem('auth_token');
     localStorage.removeItem('auth_token');
   }
@@ -233,12 +251,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const performTokenRefresh = useCallback(async (): Promise<boolean> => {
     try {
       console.log('Attempting token refresh...');
+      
+      const storedRefreshToken = tokenManager.getRefreshToken();
+      if (!storedRefreshToken) {
+        console.error('No refresh token available');
+        return false;
+      }
 
-      // Call refresh endpoint (refresh token comes from HttpOnly cookie)
-      const response = await refreshToken('');
+      // Call refresh endpoint with actual refresh token
+      const response = await refreshToken(storedRefreshToken);
 
       if (response.access_token) {
-        tokenManager.setAccessToken(response.access_token);
+        // Store both tokens if refresh token is provided
+        const newRefreshToken = response.refresh_token || storedRefreshToken;
+        tokenManager.setTokens(response.access_token, newRefreshToken);
 
         // Try to restore complete user info from sessionStorage
         const storedUserInfo = tokenManager.getUserInfo();
@@ -367,10 +393,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string, tenantSlug?: string, rememberMe: boolean = false) => {
     try {
       const response = await loginApi(email, password, tenantSlug);
-      const { access_token, user, tenant } = response;
+      const { access_token, refresh_token, user, tenant } = response;
 
-      // Store access token in memory with persistence option
-      tokenManager.setAccessToken(access_token, rememberMe);
+      // Store both tokens in memory with persistence option
+      tokenManager.setTokens(access_token, refresh_token, rememberMe);
 
       // Set user and tenant from login response
       let userData: User | null = null;
@@ -418,8 +444,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await googleOAuth(oauthData);
       console.log('OAuth response received:', response);
 
-      // Store access token in memory with persistence option
-      tokenManager.setAccessToken(response.access_token, rememberMe);
+      // Store both tokens in memory with persistence option
+      tokenManager.setTokens(response.access_token, response.refresh_token, rememberMe);
 
       // Set user and tenant from OAuth response (backend returns lowercase property names)
       let userData: User | null = null;
