@@ -11,7 +11,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _serverUrl = 'http://localhost:8080/api/v1';
+  // String _serverUrl = 'http://localhost:8080/api/v1';
+  String _serverUrl = 'http://192.168.8.135:8080/api/v1';
   bool _notificationsEnabled = true;
   String _selectedTheme = 'system';
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_barcode_scanner/flutter_barcode_scanner.dart';
 import 'package:provider/provider.dart';
 import '../models/item.dart';
@@ -27,7 +28,10 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   BarcodeScanMode _scanMode = BarcodeScanMode.lookup;
 
   Future<void> _scanBarcode() async {
+    print('_scanBarcode called - starting scan');
+    
     try {
+      print('Calling FlutterBarcodeScanner.scanBarcode...');
       final barcode = await FlutterBarcodeScanner.scanBarcode(
         '#ff6666',
         'Cancel',
@@ -35,7 +39,22 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         ScanMode.BARCODE,
       );
 
-      if (barcode == '-1') return; // User cancelled
+      print('================================');
+      print('BARCODE SCAN RESULT:');
+      print('Raw result: "$barcode"');
+      print('Length: ${barcode.length}');
+      print('Type: ${barcode.runtimeType}');
+      print('Is empty: ${barcode.isEmpty}');
+      print('Is -1 (cancelled): ${barcode == '-1'}');
+      print('================================');
+      
+      if (barcode == '-1') {
+        print('User cancelled scan');
+        return; // User cancelled
+      }
+
+      // Play success sound
+      SystemSound.play(SystemSoundType.click);
 
       setState(() {
         _lastScannedCode = barcode;
@@ -62,6 +81,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         await _handleScanResult(item);
       }
     } catch (e) {
+      print('Scan error: $e');
+      print('Error type: ${e.runtimeType}');
+      
       setState(() {
         _isLoading = false;
       });
@@ -298,11 +320,13 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(height: 40), // Add top spacing
             const Icon(
               Icons.qr_code_scanner,
               size: 120,
@@ -369,23 +393,26 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 color: Colors.grey[600],
               ),
             ),
-            const SizedBox(height: 48),
+            const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
-              height: 56,
+              height: 72,
               child: ElevatedButton.icon(
                 onPressed: _isLoading ? null : _scanBarcode,
                 icon: _isLoading
                     ? const SizedBox(
-                        width: 20,
-                        height: 20,
+                        width: 24,
+                        height: 24,
                         child: CircularProgressIndicator(
-                          strokeWidth: 2,
+                          strokeWidth: 3,
                           valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                         ),
                       )
-                    : const Icon(Icons.qr_code_scanner),
-                label: Text(_isLoading ? 'Processing...' : 'Scan Barcode'),
+                    : const Icon(Icons.qr_code_scanner, size: 28),
+                label: Text(
+                  _isLoading ? 'Processing...' : 'Scan Barcode',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
               ),
             ),
             const SizedBox(height: 32),
@@ -421,7 +448,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 ),
               ),
             ],
-          ],
+              const SizedBox(height: 40), // Add bottom spacing
+            ],
+          ),
         ),
       ),
     );

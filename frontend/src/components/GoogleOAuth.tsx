@@ -5,12 +5,14 @@ interface GoogleOAuthProps {
   onSuccess: (data: any) => void;
   onError: (error: string) => void;
   className?: string;
+  rememberMe?: boolean;
 }
 
 const GoogleOAuth: React.FC<GoogleOAuthProps> = ({ 
   onSuccess, 
   onError, 
-  className = '' 
+  className = '',
+  rememberMe = false
 }) => {
   const { loginWithGoogle } = useAuth();
 
@@ -110,7 +112,7 @@ const GoogleOAuth: React.FC<GoogleOAuthProps> = ({
           console.log('Calling loginWithGoogle with:', { code, redirectUri });
           
           // Clean up AFTER successful backend call
-          loginWithGoogle(code, redirectUri)
+          loginWithGoogle(code, redirectUri, rememberMe)
             .then((response) => {
               console.log('OAuth backend call successful, cleaning up state');
               localStorage.removeItem('google_oauth_state');

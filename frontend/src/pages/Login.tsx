@@ -20,6 +20,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [rememberedEmail, setRememberedEmail] = useState<string>('');
+  const [rememberMe, setRememberMe] = useState<boolean>(false);
 
   // Load remembered email on component mount
   useEffect(() => {
@@ -63,8 +64,8 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      // Call login without tenant slug (will use first available tenant)
-      await login(data.email, data.password);
+      // Call login with rememberMe option for persistent authentication
+      await login(data.email, data.password, undefined, rememberMe);
 
       // Remember the email for next login
       localStorage.setItem('remembered_email', data.email);
@@ -153,6 +154,20 @@ export default function Login() {
                 <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
               )}
             </div>
+
+            {/* Remember Me Checkbox */}
+            <div className="flex items-center">
+              <input
+                id="remember-me"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+                Keep me signed in across browser sessions
+              </label>
+            </div>
           </div>
 
           {error && (
@@ -205,6 +220,7 @@ export default function Login() {
             onSuccess={handleGoogleOAuthSuccess}
             onError={handleGoogleOAuthError}
             className="flex justify-center"
+            rememberMe={rememberMe}
           />
         </div>
       </div>

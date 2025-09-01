@@ -26,33 +26,60 @@ interface Tenant {
 interface AuthContextType {
   user: User | null;
   tenant: Tenant | null;
-  login: (email: string, password: string, tenantSlug?: string) => Promise<void>;
-  loginWithGoogle: (code: string, redirectUri: string) => Promise<any>;
+  login: (email: string, password: string, tenantSlug?: string, rememberMe?: boolean) => Promise<void>;
+  loginWithGoogle: (code: string, redirectUri: string, rememberMe?: boolean) => Promise<any>;
   logout: () => void;
   isLoading: boolean;
   isAuthenticated: boolean;
   accessToken: string | null;
+  isPersistent: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Token storage (in memory, optionally sync to sessionStorage)
+// Token storage (in memory, with configurable persistence)
 class TokenManager {
   private accessToken: string | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistentMode: boolean = false; // Whether to use localStorage or sessionStorage
 
   constructor() {
-    // Load token from sessionStorage on initialization
-    const stored = sessionStorage.getItem('auth_token');
-    if (stored) {
+    // First try to load from localStorage (persistent across browser sessions)
+    const persistentStored = localStorage.getItem('auth_token');
+    if (persistentStored) {
       try {
-        const data = JSON.parse(stored);
+        const data = JSON.parse(persistentStored);
         if (data.token && isValidJWT(data.token) && !isTokenExpired(data.token)) {
           this.accessToken = data.token;
+          this.persistentMode = true;
+          console.log('Restored persistent authentication from localStorage');
+          return;
+        } else {
+          // Invalid or expired token in localStorage, remove it
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+        }
+      } catch (error) {
+        console.error('Failed to restore token from localStorage:', error);
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_user');
+      }
+    }
+
+    // Fallback to sessionStorage (current session only)
+    const sessionStored = sessionStorage.getItem('auth_token');
+    if (sessionStored) {
+      try {
+        const data = JSON.parse(sessionStored);
+        if (data.token && isValidJWT(data.token) && !isTokenExpired(data.token)) {
+          this.accessToken = data.token;
+          this.persistentMode = false;
+          console.log('Restored session authentication from sessionStorage');
         }
       } catch (error) {
         console.error('Failed to restore token from sessionStorage:', error);
         sessionStorage.removeItem('auth_token');
+        sessionStorage.removeItem('auth_user');
       }
     }
   }
@@ -61,59 +88,107 @@ class TokenManager {
     return this.accessToken;
   }
 
-  setAccessToken(token: string | null): void {
+  setAccessToken(token: string | null, persistent: boolean = false): void {
     this.accessToken = token;
+    this.persistentMode = persistent;
 
     if (token) {
-      // Store in sessionStorage for persistence across page refreshes
-      sessionStorage.setItem('auth_token', JSON.stringify({
+      const tokenData = JSON.stringify({
         token,
         timestamp: Date.now(),
-      }));
+      });
+
+      if (persistent) {
+        // Store in localStorage for persistence across browser sessions
+        localStorage.setItem('auth_token', tokenData);
+        // Also clear any session storage to avoid conflicts
+        sessionStorage.removeItem('auth_token');
+        console.log('Token stored persistently in localStorage');
+      } else {
+        // Store in sessionStorage for current session only
+        sessionStorage.setItem('auth_token', tokenData);
+        // Clear localStorage to avoid conflicts
+        localStorage.removeItem('auth_token');
+        console.log('Token stored in sessionStorage for current session');
+      }
     } else {
-      // Clear from sessionStorage
+      // Clear from both storages
       sessionStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_token');
     }
   }
 
   clearTokens(): void {
     this.accessToken = null;
     sessionStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_token');
   }
 
   // Store complete user information for persistence
   setUserInfo(user: User | null, tenant: Tenant | null): void {
     if (user) {
-      sessionStorage.setItem('auth_user', JSON.stringify({
+      const userData = JSON.stringify({
         user,
         tenant,
         timestamp: Date.now(),
-      }));
+      });
+
+      if (this.persistentMode) {
+        localStorage.setItem('auth_user', userData);
+        sessionStorage.removeItem('auth_user');
+      } else {
+        sessionStorage.setItem('auth_user', userData);
+        localStorage.removeItem('auth_user');
+      }
     } else {
       sessionStorage.removeItem('auth_user');
+      localStorage.removeItem('auth_user');
     }
   }
 
   // Get stored user information
   getUserInfo(): { user: User; tenant: Tenant | null } | null {
-    const stored = sessionStorage.getItem('auth_user');
-    if (!stored) return null;
-
-    try {
-      const data = JSON.parse(stored);
-      return {
-        user: data.user,
-        tenant: data.tenant,
-      };
-    } catch (error) {
-      console.error('Failed to restore user info from sessionStorage:', error);
-      sessionStorage.removeItem('auth_user');
-      return null;
+    // First try localStorage (persistent)
+    let stored = localStorage.getItem('auth_user');
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        return {
+          user: data.user,
+          tenant: data.tenant,
+        };
+      } catch (error) {
+        console.error('Failed to restore user info from localStorage:', error);
+        localStorage.removeItem('auth_user');
+      }
     }
+
+    // Fallback to sessionStorage
+    stored = sessionStorage.getItem('auth_user');
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        return {
+          user: data.user,
+          tenant: data.tenant,
+        };
+      } catch (error) {
+        console.error('Failed to restore user info from sessionStorage:', error);
+        sessionStorage.removeItem('auth_user');
+      }
+    }
+
+    return null;
   }
 
   clearUserInfo(): void {
     sessionStorage.removeItem('auth_user');
+    localStorage.removeItem('auth_user');
+  }
+
+  // Check if currently in persistent mode
+  isPersistent(): boolean {
+    return this.persistentMode;
   }
 
   setupAutoRefresh(onRefresh: () => Promise<boolean | void>): void {
@@ -289,13 +364,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [tokenManager, performTokenRefresh]);
 
-  const login = async (email: string, password: string, tenantSlug?: string) => {
+  const login = async (email: string, password: string, tenantSlug?: string, rememberMe: boolean = false) => {
     try {
       const response = await loginApi(email, password, tenantSlug);
       const { access_token, user, tenant } = response;
 
-      // Store access token in memory (refresh token is in HttpOnly cookie)
-      tokenManager.setAccessToken(access_token);
+      // Store access token in memory with persistence option
+      tokenManager.setAccessToken(access_token, rememberMe);
 
       // Set user and tenant from login response
       let userData: User | null = null;
@@ -333,7 +408,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const loginWithGoogle = async (code: string, redirectUri: string): Promise<any> => {
+  const loginWithGoogle = async (code: string, redirectUri: string, rememberMe: boolean = false): Promise<any> => {
     try {
       console.log('loginWithGoogle called with:', { code, redirectUri });
 
@@ -343,8 +418,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await googleOAuth(oauthData);
       console.log('OAuth response received:', response);
 
-      // Store access token in memory (refresh token is in HttpOnly cookie)
-      tokenManager.setAccessToken(response.access_token);
+      // Store access token in memory with persistence option
+      tokenManager.setAccessToken(response.access_token, rememberMe);
 
       // Set user and tenant from OAuth response (backend returns lowercase property names)
       let userData: User | null = null;
@@ -425,6 +500,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       isAuthenticated: !!user,
       accessToken: tokenManager.getAccessToken(),
+      isPersistent: tokenManager.isPersistent(),
     }}>
       {children}
     </AuthContext.Provider>

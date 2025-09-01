@@ -87,7 +87,7 @@ class PurchaseOrder {
       id: json['id'],
       number: json['number'].toString(),
       supplierId: json['supplier_id'],
-      supplierName: json['supplier_name'],
+      supplierName: json['supplier_name'] ?? json['supplier']?['name'],
       status: PurchaseOrderStatus.fromString(json['status']),
       expectedAt: json['expected_at'] != null
           ? DateTime.parse(json['expected_at'])
@@ -158,15 +158,15 @@ class PurchaseOrderLine {
   factory PurchaseOrderLine.fromJson(Map<String, dynamic> json) {
     return PurchaseOrderLine(
       id: json['id'],
-      poId: json['po_id'],
+      poId: json['po_id'] ?? json['purchase_order_id'] ?? '',
       itemId: json['item_id'],
-      itemName: json['item_name'],
-      itemSku: json['item_sku'],
-      barcode: json['barcode']?.toString(),
+      itemName: json['item_name'] ?? json['item']?['name'],
+      itemSku: json['item_sku'] ?? json['item']?['sku'],
+      barcode: json['barcode']?.toString() ?? json['item']?['barcode']?.toString(),
       qtyOrdered: json['qty_ordered'] ?? 0,
       qtyReceived: json['qty_received'] ?? 0,
       unitCost: _parseDouble(json['unit_cost']),
-      tax: json['tax'] as Map<String, dynamic>?,
+      tax: _parseTax(json['tax']),
     );
   }
 
@@ -190,6 +190,24 @@ class PurchaseOrderLine {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value) ?? 0.0;
     return 0.0;
+  }
+
+  static Map<String, dynamic>? _parseTax(dynamic value) {
+    if (value == null) return null;
+    if (value is Map<String, dynamic>) return value;
+    if (value is String) {
+      try {
+        // Handle base64 encoded JSON or plain JSON string
+        if (value.isEmpty || value == 'e30=') {
+          return {}; // Empty object for empty base64 ({})
+        }
+        // Try to parse as JSON string
+        return {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
   }
 
   // Helper methods

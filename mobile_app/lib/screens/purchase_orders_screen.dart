@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../models/purchase_order.dart';
 import '../services/api_service.dart';
 import 'purchase_order_create_screen.dart';
+import 'purchase_order_edit_screen.dart';
 import 'goods_receipt_screen.dart';
 
 class PurchaseOrdersScreen extends StatefulWidget {
@@ -157,6 +158,20 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
     ).then((_) => _loadPurchaseOrders()); // Refresh list when returning
   }
 
+  void _navigateToPODetail(PurchaseOrder po) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PurchaseOrderEditScreen(purchaseOrder: po),
+      ),
+    ).then((result) {
+      // Refresh list when returning if changes were made
+      if (result == true) {
+        _loadPurchaseOrders();
+      }
+    });
+  }
+
   void _navigateToGoodsReceipt(PurchaseOrder po) {
     if (!po.canReceive) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -277,7 +292,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             final po = _filteredPurchaseOrders[index];
                             return _PurchaseOrderCard(
                               purchaseOrder: po,
-                              onTap: () => _navigateToGoodsReceipt(po),
+                              onTap: () => _navigateToPODetail(po),
+                              onReceive: po.canReceive ? () => _navigateToGoodsReceipt(po) : null,
                             );
                           },
                         ),
@@ -298,10 +314,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 class _PurchaseOrderCard extends StatelessWidget {
   final PurchaseOrder purchaseOrder;
   final VoidCallback onTap;
+  final VoidCallback? onReceive;
 
   const _PurchaseOrderCard({
     required this.purchaseOrder,
     required this.onTap,
+    this.onReceive,
   });
 
   @override
@@ -426,16 +444,28 @@ class _PurchaseOrderCard extends StatelessWidget {
                 ],
               ),
 
-              // Action buttons for draft/approved status
-              if (purchaseOrder.canReceive) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
+              // Action buttons
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: onTap,
+                      icon: const Icon(Icons.edit, size: 16),
+                      label: Text(purchaseOrder.status == PurchaseOrderStatus.draft || purchaseOrder.status == PurchaseOrderStatus.approved ? 'Edit PO' : 'View PO'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF2563EB),
+                        side: const BorderSide(color: Color(0xFF2563EB)),
+                      ),
+                    ),
+                  ),
+                  if (onReceive != null) ...[
+                    const SizedBox(width: 8),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: onTap,
+                        onPressed: onReceive,
                         icon: const Icon(Icons.inventory, size: 16),
-                        label: const Text('Receive Items'),
+                        label: const Text('Receive'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF059669),
                           side: const BorderSide(color: Color(0xFF059669)),
@@ -443,8 +473,8 @@ class _PurchaseOrderCard extends StatelessWidget {
                       ),
                     ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ],
           ),
         ),

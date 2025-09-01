@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_barcode_scanner/flutter_barcode_scanner.dart';
 import 'package:provider/provider.dart';
 import '../models/purchase_order.dart';
@@ -105,6 +106,9 @@ class _PurchaseOrderCreateScreenState extends State<PurchaseOrderCreateScreen> {
 
       if (barcode == '-1') return; // User cancelled
 
+      // Play success sound
+      SystemSound.play(SystemSoundType.click);
+
       // Search for item by barcode
       final apiService = Provider.of<ApiService>(context, listen: false);
       final item = await apiService.getItemByBarcode(barcode);
@@ -199,7 +203,71 @@ class _PurchaseOrderCreateScreenState extends State<PurchaseOrderCreateScreen> {
   }
 
   void _removeLine(int index) {
-    setState(() => _lines.removeAt(index));
+    final line = _lines[index];
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove Item'),
+        content: Text('Remove "${line.itemName}" from this purchase order?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() => _lines.removeAt(index));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Removed ${line.itemName} from order')),
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editQuantity(int index) {
+    final line = _lines[index];
+    final controller = TextEditingController(text: line.qtyOrdered.toString());
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Edit Quantity - ${line.itemName}'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Quantity',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) {
+            final quantity = int.tryParse(value) ?? line.qtyOrdered;
+            Navigator.pop(context);
+            _updateLineQuantity(index, quantity);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final quantity = int.tryParse(controller.text) ?? line.qtyOrdered;
+              Navigator.pop(context);
+              _updateLineQuantity(index, quantity);
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _selectExpectedDate() async {
@@ -464,56 +532,122 @@ class _PurchaseOrderCreateScreenState extends State<PurchaseOrderCreateScreen> {
                                   itemCount: _lines.length,
                                   itemBuilder: (context, index) {
                                     final line = _lines[index];
-                                    return Card(
-                                      margin: const EdgeInsets.only(bottom: 8),
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(12),
-                                        child: Row(
+                                    return Dismissible(
+                                      key: Key('line_${line.id}'),
+                                      direction: DismissDirection.endToStart,
+                                      background: Container(
+                                        alignment: Alignment.centerRight,
+                                        padding: const EdgeInsets.only(right: 16),
+                                        color: Colors.red,
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                            Icon(Icons.delete, color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              'Delete',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      confirmDismiss: (direction) async {
+                                        return await showDialog<bool>(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title: const Text('Remove Item'),
+                                            content: Text('Remove "${line.itemName}" from this purchase order?'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context, false),
+                                                child: const Text('Cancel'),
+                                              ),
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context, true),
+                                                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                                child: const Text('Remove'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                      onDismissed: (direction) {
+                                        setState(() => _lines.removeAt(index));
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Removed ${line.itemName} from order'),
+                                            action: SnackBarAction(
+                                              label: 'Undo',
+                                              onPressed: () {
+                                                setState(() => _lines.insert(index, line));
+                                              },
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      child: Card(
+                                        margin: const EdgeInsets.only(bottom: 8),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      line.itemName ?? 'Unknown Item',
+                                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                                    ),
+                                                    Text(
+                                                      'SKU: ${line.itemSku ?? 'N/A'}',
+                                                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                                                    ),
+                                                    Text(
+                                                      '\$${line.unitCost.toStringAsFixed(2)} each • Total: \$${line.lineTotal.toStringAsFixed(2)}',
+                                                      style: const TextStyle(color: Colors.green),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              Row(
                                                 children: [
-                                                  Text(
-                                                    line.itemName ?? 'Unknown Item',
-                                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.remove),
+                                                    onPressed: () => _updateLineQuantity(index, line.qtyOrdered - 1),
                                                   ),
-                                                  Text(
-                                                    'SKU: ${line.itemSku ?? 'N/A'}',
-                                                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                                                  GestureDetector(
+                                                    onTap: () => _editQuantity(index),
+                                                    child: Container(
+                                                      width: 60,
+                                                      padding: const EdgeInsets.symmetric(vertical: 8),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.grey[100],
+                                                        borderRadius: BorderRadius.circular(8),
+                                                        border: Border.all(color: Colors.grey[300]!),
+                                                      ),
+                                                      child: Text(
+                                                        '${line.qtyOrdered}',
+                                                        textAlign: TextAlign.center,
+                                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                                      ),
+                                                    ),
                                                   ),
-                                                  Text(
-                                                    '\$${line.unitCost.toStringAsFixed(2)} each',
-                                                    style: const TextStyle(color: Colors.green),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.add),
+                                                    onPressed: () => _updateLineQuantity(index, line.qtyOrdered + 1),
+                                                  ),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.delete, color: Colors.red),
+                                                    onPressed: () => _removeLine(index),
                                                   ),
                                                 ],
                                               ),
-                                            ),
-                                            Row(
-                                              children: [
-                                                IconButton(
-                                                  icon: const Icon(Icons.remove),
-                                                  onPressed: () => _updateLineQuantity(index, line.qtyOrdered - 1),
-                                                ),
-                                                SizedBox(
-                                                  width: 60,
-                                                  child: Text(
-                                                    '${line.qtyOrdered}',
-                                                    textAlign: TextAlign.center,
-                                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                                  ),
-                                                ),
-                                                IconButton(
-                                                  icon: const Icon(Icons.add),
-                                                  onPressed: () => _updateLineQuantity(index, line.qtyOrdered + 1),
-                                                ),
-                                                IconButton(
-                                                  icon: const Icon(Icons.delete, color: Colors.red),
-                                                  onPressed: () => _removeLine(index),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     );

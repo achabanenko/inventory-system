@@ -153,9 +153,21 @@ func (h *Handler) Login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate refresh token")
 	}
 
+	// Set refresh token as HttpOnly cookie
+	refreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/",
+		MaxAge:   int(h.Config.RefreshExpiry.Seconds()),
+		HttpOnly: true,
+		Secure:   h.Config.Environment == "production", // Use secure cookies in production
+		SameSite: http.SameSiteStrictMode,
+	}
+	c.SetCookie(refreshCookie)
+
 	return c.JSON(http.StatusOK, LoginResponse{
 		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: refreshToken, // Still return in response for mobile/other clients that need it
 		ExpiresIn:    int(h.Config.JWTExpiry.Seconds()),
 		User: UserResponse{
 			ID:       userID,
@@ -368,6 +380,18 @@ func (h *Handler) GoogleOAuth(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate refresh token")
 	}
 
+	// Set refresh token as HttpOnly cookie
+	refreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		Path:     "/",
+		MaxAge:   int(h.Config.RefreshExpiry.Seconds()),
+		HttpOnly: true,
+		Secure:   h.Config.Environment == "production",
+		SameSite: http.SameSiteStrictMode,
+	}
+	c.SetCookie(refreshCookie)
+
 	response := GoogleOAuthResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -527,16 +551,29 @@ func (h *Handler) SelectTenantForOAuthUser(c echo.Context) error {
 }
 
 func (h *Handler) Refresh(c echo.Context) error {
-	var req struct {
-		RefreshToken string `json:"refresh_token" validate:"required"`
+	// First try to get refresh token from HttpOnly cookie (web clients)
+	refreshToken := ""
+	if cookie, err := c.Cookie("refresh_token"); err == nil {
+		refreshToken = cookie.Value
 	}
 
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	// Fallback: try to get from request body (mobile/API clients)
+	if refreshToken == "" {
+		var req struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := c.Bind(&req); err == nil && req.RefreshToken != "" {
+			refreshToken = req.RefreshToken
+		}
 	}
 
-	claims, err := h.validateToken(req.RefreshToken)
+	if refreshToken == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "refresh token not found")
+	}
+
+	claims, err := h.validateToken(refreshToken)
 	if err != nil {
+		log.Error().Err(err).Str("refresh_token", "***"+refreshToken[len(refreshToken)-10:]).Msg("Invalid refresh token")
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid refresh token")
 	}
 
@@ -558,6 +595,18 @@ func (h *Handler) Refresh(c echo.Context) error {
 }
 
 func (h *Handler) Logout(c echo.Context) error {
+	// Clear the refresh token cookie
+	refreshCookie := &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1, // Expire the cookie immediately
+		HttpOnly: true,
+		Secure:   h.Config.Environment == "production",
+		SameSite: http.SameSiteStrictMode,
+	}
+	c.SetCookie(refreshCookie)
+
 	// TODO: Implement token blacklisting
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "logged out successfully",

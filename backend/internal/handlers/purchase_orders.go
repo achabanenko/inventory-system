@@ -559,16 +559,24 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update purchase order")
 	}
 
-	// Delete existing lines
-	_, err = tx.Exec("DELETE FROM purchase_order_lines WHERE purchase_order_id = $1", id)
+	// Get existing lines to track which ones should be kept
+	existingLines := make(map[string]bool)
+	rows, err := tx.Query("SELECT id FROM purchase_order_lines WHERE purchase_order_id = $1", id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete existing lines")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to fetch existing lines")
 	}
+	for rows.Next() {
+		var lineID string
+		rows.Scan(&lineID)
+		existingLines[lineID] = true
+	}
+	rows.Close()
 
-	// Create new lines
+	// Process lines from the request - upsert approach
 	var lines []PurchaseOrderLine
+	processedLines := make(map[string]bool)
+	
 	for _, lineReq := range req.Lines {
-		lineID := uuid.New().String()
 		// Convert string unit cost to decimal for resolveOrCreateItem
 		unitCostDecimal, err := decimal.NewFromString(lineReq.UnitCost)
 		if err != nil {
@@ -586,13 +594,32 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 				taxJSON = &s
 			}
 		}
-		_, err = tx.Exec(`
-            INSERT INTO purchase_order_lines (id, purchase_order_id, item_id, qty_ordered, qty_received, unit_cost, tax, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, 0, $5::numeric, COALESCE($6::jsonb, '{}'::jsonb), NOW(), NOW())
-        `, lineID, id, resolvedItemID, lineReq.QtyOrdered, unitCostStr, taxJSON)
-		if err != nil {
-			c.Logger().Errorf("failed to create purchase order line (update): %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create purchase order line")
+
+		var lineID string
+		if lineReq.ID != nil && *lineReq.ID != "" && existingLines[*lineReq.ID] {
+			// Update existing line
+			lineID = *lineReq.ID
+			_, err = tx.Exec(`
+				UPDATE purchase_order_lines 
+				SET item_id = $1, qty_ordered = $2, unit_cost = $3::numeric, tax = COALESCE($4::jsonb, '{}'::jsonb), updated_at = NOW()
+				WHERE id = $5 AND purchase_order_id = $6
+			`, resolvedItemID, lineReq.QtyOrdered, unitCostStr, taxJSON, lineID, id)
+			if err != nil {
+				c.Logger().Errorf("failed to update purchase order line: %v", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update purchase order line")
+			}
+			processedLines[lineID] = true
+		} else {
+			// Create new line
+			lineID = uuid.New().String()
+			_, err = tx.Exec(`
+				INSERT INTO purchase_order_lines (id, purchase_order_id, item_id, qty_ordered, qty_received, unit_cost, tax, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, 0, $5::numeric, COALESCE($6::jsonb, '{}'::jsonb), NOW(), NOW())
+			`, lineID, id, resolvedItemID, lineReq.QtyOrdered, unitCostStr, taxJSON)
+			if err != nil {
+				c.Logger().Errorf("failed to create purchase order line: %v", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create purchase order line")
+			}
 		}
 
 		// Calculate line total
@@ -609,6 +636,17 @@ func (h *Handler) UpdatePurchaseOrder(c echo.Context) error {
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		})
+	}
+
+	// Delete lines that were not included in the update request (removed by user)
+	for existingLineID := range existingLines {
+		if !processedLines[existingLineID] {
+			_, err = tx.Exec("DELETE FROM purchase_order_lines WHERE id = $1", existingLineID)
+			if err != nil {
+				c.Logger().Errorf("failed to delete removed purchase order line: %v", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete removed purchase order line")
+			}
+		}
 	}
 
 	// Commit transaction
@@ -830,6 +868,102 @@ func (h *Handler) ReceivePurchaseOrder(c echo.Context) error {
 		"message": "Items received successfully",
 		"status":  newStatus,
 	})
+}
+
+func (h *Handler) AddItemToPurchaseOrder(c echo.Context) error {
+	id := c.Param("id")
+
+	var req struct {
+		ItemID     string `json:"item_id" validate:"required"`
+		QtyOrdered int    `json:"qty_ordered" validate:"required,min=1"`
+		UnitCost   string `json:"unit_cost" validate:"required"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Get user claims for tenant ID
+	claims, errClaims := appmw.GetUserClaims(c)
+	if errClaims != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+
+	// Check if purchase order exists and is in DRAFT status
+	var currentStatus string
+	err := h.DB.QueryRow("SELECT status FROM purchase_orders WHERE id = $1", id).Scan(&currentStatus)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return echo.NewHTTPError(http.StatusNotFound, "Purchase order not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	if currentStatus != "DRAFT" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Can only add items to purchase orders in DRAFT status")
+	}
+
+	// Start transaction
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+	defer tx.Rollback()
+
+	// First resolve/create the item to get the correct item ID
+	unitCostDecimal, err := decimal.NewFromString(req.UnitCost)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid unit cost: %s", req.UnitCost))
+	}
+
+	resolvedItemID, resErr := h.resolveOrCreateItem(tx, req.ItemID, &unitCostDecimal, claims.TenantID)
+	if resErr != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, resErr.Error())
+	}
+
+	// Now check if this resolved item already exists in the PO
+	var existingQty int
+	var existingLineID string
+	err = tx.QueryRow(`
+		SELECT id, qty_ordered FROM purchase_order_lines 
+		WHERE purchase_order_id = $1 AND item_id = $2
+	`, id, resolvedItemID).Scan(&existingLineID, &existingQty)
+
+	unitCostStr := unitCostDecimal.StringFixed(2)
+
+	if err == sql.ErrNoRows {
+		// Item doesn't exist, create new line
+		lineID := uuid.New().String()
+		_, err = tx.Exec(`
+			INSERT INTO purchase_order_lines (id, purchase_order_id, item_id, qty_ordered, qty_received, unit_cost, tax, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 0, $5::numeric, '{}'::jsonb, NOW(), NOW())
+		`, lineID, id, resolvedItemID, req.QtyOrdered, unitCostStr)
+		if err != nil {
+			c.Logger().Errorf("failed to create purchase order line: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to add item to purchase order")
+		}
+	} else if err == nil {
+		// Item exists, update quantity
+		newQty := existingQty + req.QtyOrdered
+		_, err = tx.Exec(`
+			UPDATE purchase_order_lines 
+			SET qty_ordered = $1, unit_cost = $2::numeric, updated_at = NOW()
+			WHERE id = $3
+		`, newQty, unitCostStr, existingLineID)
+		if err != nil {
+			c.Logger().Errorf("failed to update purchase order line quantity: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update item quantity")
+		}
+	} else {
+		c.Logger().Errorf("failed to check existing item: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	// Commit transaction
+	if err = tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": "Item added successfully"})
 }
 
 func (h *Handler) ClosePurchaseOrder(c echo.Context) error {

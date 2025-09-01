@@ -135,6 +135,7 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 	items.Use(middleware.RequireTenant())
 	items.GET("", h.ListItems)
 	items.POST("", h.CreateItem)
+	items.GET("/barcode/:barcode", h.GetItemByBarcode)
 	items.GET("/:id", h.GetItem)
 	items.PUT("/:id", h.UpdateItem)
 	items.DELETE("/:id", h.DeleteItem)
@@ -184,6 +185,7 @@ func setupRoutes(e *echo.Echo, h *handlers.Handler) {
 	purchaseOrders.POST("/:id/approve", h.ApprovePurchaseOrder)
 	purchaseOrders.POST("/:id/receive", h.ReceivePurchaseOrder)
 	purchaseOrders.POST("/:id/close", h.ClosePurchaseOrder)
+	purchaseOrders.POST("/:id/items", h.AddItemToPurchaseOrder)
 
 	transfers := api.Group("/transfers")
 	transfers.Use(middleware.JWT(h.Config.JWTSecret))

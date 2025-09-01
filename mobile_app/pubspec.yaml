@@ -37,9 +37,9 @@ dependencies:
   http: ^1.5.0
   provider: ^6.1.5+1
   shared_preferences: ^2.5.3
-  qr_code_scanner: ^1.0.1
   dio: ^5.9.0
   flutter_barcode_scanner: ^2.0.0
+  mobile_scanner: ^5.2.3
 
   # Secure storage and biometric authentication
   flutter_secure_storage: ^9.0.0
@@ -49,7 +49,7 @@ dependencies:
   local_auth_platform_interface: ^1.0.10
 
   # Google OAuth
-  google_sign_in: ^6.1.5
+  # google_sign_in: ^6.1.5  # Temporarily commented due to dependency conflict with mobile_scanner
 
 dev_dependencies:
   flutter_test:

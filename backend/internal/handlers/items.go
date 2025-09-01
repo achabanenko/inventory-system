@@ -323,6 +323,69 @@ func (h *Handler) GetItem(c echo.Context) error {
 	return c.JSON(http.StatusOK, dto)
 }
 
+func (h *Handler) GetItemByBarcode(c echo.Context) error {
+	// Get tenant ID from context
+	tenantID, ok := middleware.GetTenantID(c.Request().Context())
+	if !ok {
+		return echo.NewHTTPError(http.StatusBadRequest, "Tenant context required")
+	}
+
+	barcode := c.Param("barcode")
+	if barcode == "" {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "VALIDATION_ERROR", Message: "barcode is required"}})
+	}
+
+	query := `
+        SELECT i.id, i.sku, i.name, i.barcode, i.uom, i.category_id, i.cost, i.price, i.attributes, i.is_active, i.created_at, i.updated_at, i.deleted_at,
+               c.id as cat_id, c.name as cat_name
+        FROM items i
+        LEFT JOIN categories c ON i.category_id = c.id 
+        WHERE i.barcode = $1 AND i.tenant_id = $2 AND i.deleted_at IS NULL AND i.is_active = true
+    `
+
+	var (
+		dto        ItemDTO
+		barcodeCol sql.NullString
+		categoryID sql.NullString
+		catID      sql.NullString
+		catName    sql.NullString
+		rawAttr    []byte
+	)
+
+	err := h.DB.QueryRow(query, barcode, tenantID).Scan(
+		&dto.ID, &dto.SKU, &dto.Name, &barcodeCol, &dto.UOM, &categoryID, &dto.Cost, &dto.Price, &rawAttr, &dto.IsActive, &dto.CreatedAt, &dto.UpdatedAt, &dto.DeletedAt, &catID, &catName,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, ErrorResponse{Error: ErrorDetail{Code: "NOT_FOUND", Message: "item not found"}})
+		}
+		return c.JSON(http.StatusInternalServerError, ErrorResponse{Error: ErrorDetail{Code: "INTERNAL_ERROR", Message: err.Error()}})
+	}
+	
+	if barcodeCol.Valid {
+		s := barcodeCol.String
+		dto.Barcode = &s
+	}
+	if categoryID.Valid {
+		if cid, err := uuid.Parse(categoryID.String); err == nil {
+			dto.CategoryID = &cid
+		}
+	}
+	if catID.Valid && catName.Valid {
+		if cid, err := uuid.Parse(catID.String); err == nil {
+			dto.Category = &CategoryDTO{
+				ID:   cid,
+				Name: catName.String,
+			}
+		}
+	}
+	if len(rawAttr) > 0 {
+		_ = json.Unmarshal(rawAttr, &dto.Attributes)
+	}
+	
+	return c.JSON(http.StatusOK, dto)
+}
+
 func (h *Handler) UpdateItem(c echo.Context) error {
 	// Get tenant ID from context
 	tenantID, ok := middleware.GetTenantID(c.Request().Context())

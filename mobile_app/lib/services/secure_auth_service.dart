@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:google_sign_in/google_sign_in.dart';
+// import 'package:google_sign_in/google_sign_in.dart'; // Temporarily commented
 import 'dart:convert';
 import 'dart:async';
 import '../models/user.dart';
@@ -22,10 +22,10 @@ class SecureAuthService extends ChangeNotifier {
   ApiService? _apiService;
 
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: ['email', 'profile'],
-    serverClientId: '778454408539-06ffskhonrbilehq1q1e241rpffn6let.apps.googleusercontent.com',
-  );
+  // final GoogleSignIn _googleSignIn = GoogleSignIn(
+  //   scopes: ['email', 'profile'],
+  //   serverClientId: '778454408539-06ffskhonrbilehq1q1e241rpffn6let.apps.googleusercontent.com',
+  // ); // Temporarily commented
   Timer? _refreshTimer;
 
   User? get user => _user;
@@ -205,8 +205,11 @@ class SecureAuthService extends ChangeNotifier {
     }
   }
 
-  /// Login with Google OAuth
+  /// Login with Google OAuth - Temporarily disabled
   Future<bool> loginWithGoogle() async {
+    debugPrint('SecureAuthService: Google OAuth temporarily disabled');
+    return false;
+    /*
     try {
       debugPrint('SecureAuthService: Starting Google OAuth login');
       if (_apiService == null) {
@@ -215,7 +218,7 @@ class SecureAuthService extends ChangeNotifier {
       }
 
       // Sign out first to ensure fresh authentication
-      await _googleSignIn.signOut();
+      // await _googleSignIn.signOut(); // Temporarily disabled
 
       // Initiate Google Sign-In
       final GoogleSignInAccount? googleAccount = await _googleSignIn.signIn();
@@ -261,9 +264,10 @@ class SecureAuthService extends ChangeNotifier {
     } catch (e) {
       debugPrint('SecureAuthService: Google OAuth login error: $e');
       // Sign out from Google on error
-      await _googleSignIn.signOut();
+      // await _googleSignIn.signOut(); // Temporarily disabled
       return false;
     }
+    */
   }
 
   /// Logout and clear all stored data
@@ -279,7 +283,7 @@ class SecureAuthService extends ChangeNotifier {
 
     // Sign out from Google
     try {
-      await _googleSignIn.signOut();
+      // await _googleSignIn.signOut(); // Temporarily disabled
     } catch (e) {
       debugPrint('Error during Google sign-out: $e');
     }

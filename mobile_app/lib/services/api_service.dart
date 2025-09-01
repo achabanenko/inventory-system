@@ -5,11 +5,12 @@ import '../models/item.dart';
 import '../models/supplier.dart';
 import '../models/location.dart';
 import '../models/purchase_order.dart';
+import 'cache_service.dart';
 
 class ApiService {
-  // static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
-  static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
-  static const String baseUrl = 'http://localhost:8080/api/v1';
+  static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
+  // static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
+  // static const String baseUrl = 'http://localhost:8080/api/v1';
   String? _token;
   Function? _onTokenExpired;
 
@@ -105,7 +106,18 @@ class ApiService {
     }
   }
 
-  Future<List<Item>> getItems({String? search, int page = 1, int limit = 20}) async {
+  Future<List<Item>> getItems({String? search, int page = 1, int limit = 20, bool useCache = true}) async {
+    // Use cached version if enabled
+    if (useCache) {
+      final cachedItems = await CacheService.instance.getCachedItems(search: search);
+      if (cachedItems.isNotEmpty) {
+        return cachedItems;
+      }
+    }
+    return _fetchItemsFromAPI(search: search, page: page, limit: limit);
+  }
+
+  Future<List<Item>> _fetchItemsFromAPI({String? search, int page = 1, int limit = 20}) async {
     final queryParams = <String, String>{
       'page': page.toString(),
       'limit': limit.toString(),
@@ -129,9 +141,16 @@ class ApiService {
         return <Item>[];
       }
       
-      return itemsList
+      final items = itemsList
           .map((item) => Item.fromJson(item))
           .toList();
+      
+      // Cache the items if caching is enabled
+      for (final item in items) {
+        await CacheService.instance.cacheItem(item);
+      }
+      
+      return items;
     } else if (response.statusCode == 401) {
       print('ApiService: Token expired, attempting refresh');
       if (_onTokenExpired != null) {
@@ -147,14 +166,34 @@ class ApiService {
     }
   }
 
-  Future<Item?> getItemByBarcode(String barcode) async {
+  Future<Item?> _fetchItemFromAPI(String itemId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/items/$itemId'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      return Item.fromJson(jsonDecode(response.body));
+    } else if (response.statusCode == 404) {
+      return null;
+    } else {
+      throw Exception('Failed to fetch item');
+    }
+  }
+
+  Future<Item?> getItemByBarcode(String barcode, {bool useCache = true}) async {
     final response = await http.get(
       Uri.parse('$baseUrl/items/barcode/$barcode'),
       headers: _headers,
     );
 
     if (response.statusCode == 200) {
-      return Item.fromJson(jsonDecode(response.body));
+      final item = Item.fromJson(jsonDecode(response.body));
+      // Cache the item if caching is enabled
+      if (useCache) {
+        await CacheService.instance.cacheItem(item);
+      }
+      return item;
     } else if (response.statusCode == 404) {
       return null;
     } else {
@@ -419,7 +458,7 @@ class ApiService {
 
   Future<PurchaseOrder> getPurchaseOrder(String id) async {
     final response = await http.get(
-      Uri.parse('$baseUrl/pos/$id'),
+      Uri.parse('$baseUrl/purchase-orders/$id'),
       headers: _headers,
     );
 
@@ -444,7 +483,7 @@ class ApiService {
     };
 
     final response = await http.post(
-      Uri.parse('$baseUrl/pos'),
+      Uri.parse('$baseUrl/purchase-orders'),
       headers: _headers,
       body: jsonEncode(requestBody),
     );
@@ -458,11 +497,15 @@ class ApiService {
 
   Future<PurchaseOrder> updatePurchaseOrder(
     String id, {
+    String? supplierId,
     DateTime? expectedAt,
     String? notes,
     List<Map<String, dynamic>>? lines,
   }) async {
     final requestBody = <String, dynamic>{};
+    if (supplierId != null) {
+      requestBody['supplier_id'] = supplierId;
+    }
     if (expectedAt != null) {
       requestBody['expected_at'] = expectedAt.toIso8601String();
     }
@@ -474,7 +517,7 @@ class ApiService {
     }
 
     final response = await http.put(
-      Uri.parse('$baseUrl/pos/$id'),
+      Uri.parse('$baseUrl/purchase-orders/$id'),
       headers: _headers,
       body: jsonEncode(requestBody),
     );
@@ -488,7 +531,7 @@ class ApiService {
 
   Future<void> approvePurchaseOrder(String id) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/pos/$id/approve'),
+      Uri.parse('$baseUrl/purchase-orders/$id/approve'),
       headers: _headers,
     );
 
@@ -499,7 +542,7 @@ class ApiService {
 
   Future<void> receivePurchaseOrder(String id, List<Map<String, dynamic>> receipts) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/pos/$id/receive'),
+      Uri.parse('$baseUrl/purchase-orders/$id/receive'),
       headers: _headers,
       body: jsonEncode(receipts),
     );
@@ -511,12 +554,28 @@ class ApiService {
 
   Future<void> closePurchaseOrder(String id) async {
     final response = await http.post(
-      Uri.parse('$baseUrl/pos/$id/close'),
+      Uri.parse('$baseUrl/purchase-orders/$id/close'),
       headers: _headers,
     );
 
     if (response.statusCode != 200) {
       throw Exception('Failed to close purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> addItemToPurchaseOrder(String poId, String itemId, int quantity, double unitCost) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/purchase-orders/$poId/items'),
+      headers: _headers,
+      body: jsonEncode({
+        'item_id': itemId,
+        'qty_ordered': quantity,
+        'unit_cost': unitCost.toStringAsFixed(2),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to add item to purchase order: ${response.body}');
     }
   }
 }

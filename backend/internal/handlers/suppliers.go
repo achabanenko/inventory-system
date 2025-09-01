@@ -88,7 +88,12 @@ func (h *Handler) ListSuppliers(c echo.Context) error {
 		}
 
 		if contact.Valid {
-			supplier.Contact = contact.String
+			var contactMap map[string]interface{}
+			if err := json.Unmarshal([]byte(contact.String), &contactMap); err == nil {
+				supplier.Contact = contactMap
+			} else {
+				supplier.Contact = contact.String
+			}
 		}
 
 		suppliers = append(suppliers, supplier)
@@ -183,7 +188,12 @@ func (h *Handler) CreateSupplier(c echo.Context) error {
 
 	resp := SupplierModel{ID: id, Code: code, Name: name, IsActive: isActiveDB}
 	if contact.Valid {
-		resp.Contact = contact.String
+		var contactMap map[string]interface{}
+		if err := json.Unmarshal([]byte(contact.String), &contactMap); err == nil {
+			resp.Contact = contactMap
+		} else {
+			resp.Contact = contact.String
+		}
 	}
 	return c.JSON(http.StatusCreated, resp)
 }
@@ -204,7 +214,12 @@ func (h *Handler) GetSupplier(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 	}
 	if contact.Valid {
-		s.Contact = contact.String
+		var contactMap map[string]interface{}
+		if err := json.Unmarshal([]byte(contact.String), &contactMap); err == nil {
+			s.Contact = contactMap
+		} else {
+			s.Contact = contact.String
+		}
 	}
 	return c.JSON(http.StatusOK, s)
 }
@@ -271,7 +286,12 @@ func (h *Handler) UpdateSupplier(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "database error")
 	}
 	if contact.Valid {
-		out.Contact = contact.String
+		var contactMap map[string]interface{}
+		if err := json.Unmarshal([]byte(contact.String), &contactMap); err == nil {
+			out.Contact = contactMap
+		} else {
+			out.Contact = contact.String
+		}
 	}
 	return c.JSON(http.StatusOK, out)
 }
