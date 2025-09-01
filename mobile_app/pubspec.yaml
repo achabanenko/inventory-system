@@ -48,6 +48,9 @@ dependencies:
   local_auth_darwin: ^1.6.0
   local_auth_platform_interface: ^1.0.10
 
+  # Google OAuth
+  google_sign_in: ^6.1.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

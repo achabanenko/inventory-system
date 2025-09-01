@@ -2,10 +2,14 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/user.dart';
 import '../models/item.dart';
+import '../models/supplier.dart';
+import '../models/location.dart';
+import '../models/purchase_order.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
-  // static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
+  // static const String baseUrl = 'http://192.168.8.135:8080/api/v1';
+  static const String baseUrl = 'http://192.168.0.44:8080/api/v1';
+  static const String baseUrl = 'http://localhost:8080/api/v1';
   String? _token;
   Function? _onTokenExpired;
 
@@ -24,6 +28,9 @@ class ApiService {
     };
     if (_token != null) {
       headers['Authorization'] = 'Bearer $_token';
+      print('ApiService: Using auth header: Bearer ***${_token!.substring(_token!.length - 10)}');
+    } else {
+      print('ApiService: No token available for request');
     }
     return headers;
   }
@@ -71,6 +78,30 @@ class ApiService {
       return jsonDecode(response.body);
     } else {
       throw Exception('Token refresh failed');
+    }
+  }
+
+  Future<Map<String, dynamic>> googleOAuth(String code, String redirectUri) async {
+    print('Attempting Google OAuth to: $baseUrl/auth/google');
+    print('Code: $code');
+    print('Redirect URI: $redirectUri');
+    
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/google'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'code': code,
+        'redirect_uri': redirectUri,
+      }),
+    );
+
+    print('OAuth Response status: ${response.statusCode}');
+    print('OAuth Response body: ${response.body}');
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Google OAuth failed: ${response.body}');
     }
   }
 
@@ -197,6 +228,295 @@ class ApiService {
       return jsonDecode(response.body);
     } else {
       throw Exception('Failed to fetch inventory level');
+    }
+  }
+
+  // ============================================================================
+  // DEBUGGING HELPERS
+  // ============================================================================
+
+  /// Test method to verify authentication is working
+  Future<bool> testAuthentication() async {
+    try {
+      print('ApiService: Testing authentication...');
+      print('ApiService: Current token: ${_token != null ? "***${_token!.substring(_token!.length - 10)}" : "null"}');
+
+      // Try to get current user info
+      final response = await http.get(
+        Uri.parse('$baseUrl/auth/me'),
+        headers: _headers,
+      );
+
+      print('ApiService: Auth test response status: ${response.statusCode}');
+      print('ApiService: Auth test response body: ${response.body}');
+
+      return response.statusCode == 200;
+    } catch (e) {
+      print('ApiService: Auth test error: $e');
+      return false;
+    }
+  }
+
+  // ============================================================================
+  // SUPPLIERS API METHODS
+  // ============================================================================
+
+  Future<List<Supplier>> getSuppliers({String? search, int page = 1, int limit = 20}) async {
+    final queryParams = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (search != null && search.isNotEmpty) {
+      queryParams['q'] = search;
+    }
+
+    final uri = Uri.parse('$baseUrl/suppliers').replace(queryParameters: queryParams);
+    print('ApiService: Making request to suppliers: ${uri.toString()}');
+    final response = await http.get(uri, headers: _headers);
+    print('ApiService: Suppliers response status: ${response.statusCode}');
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final suppliersList = data['data'] as List?;
+      if (suppliersList == null) {
+        return <Supplier>[];
+      }
+
+      return suppliersList
+          .map((supplier) => Supplier.fromJson(supplier))
+          .toList();
+    } else if (response.statusCode == 401) {
+      if (_onTokenExpired != null) {
+        final refreshed = await _onTokenExpired!();
+        if (refreshed) {
+          return getSuppliers(search: search, page: page, limit: limit);
+        }
+      }
+      throw Exception('Authentication failed - please login again');
+    } else {
+      throw Exception('Failed to fetch suppliers: ${response.statusCode} - ${response.body}');
+    }
+  }
+
+  Future<Supplier> getSupplier(String id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/suppliers/$id'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      return Supplier.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to fetch supplier');
+    }
+  }
+
+  // ============================================================================
+  // LOCATIONS API METHODS
+  // ============================================================================
+
+  Future<List<Location>> getLocations({String? search, int page = 1, int limit = 20}) async {
+    final queryParams = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (search != null && search.isNotEmpty) {
+      queryParams['q'] = search;
+    }
+
+    final uri = Uri.parse('$baseUrl/locations').replace(queryParameters: queryParams);
+    final response = await http.get(uri, headers: _headers);
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final locationsList = data['data'] as List?;
+      if (locationsList == null) {
+        return <Location>[];
+      }
+
+      return locationsList
+          .map((location) => Location.fromJson(location))
+          .toList();
+    } else if (response.statusCode == 401) {
+      if (_onTokenExpired != null) {
+        final refreshed = await _onTokenExpired!();
+        if (refreshed) {
+          return getLocations(search: search, page: page, limit: limit);
+        }
+      }
+      throw Exception('Authentication failed - please login again');
+    } else {
+      throw Exception('Failed to fetch locations: ${response.statusCode} - ${response.body}');
+    }
+  }
+
+  Future<Location> getLocation(String id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/locations/$id'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      return Location.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to fetch location');
+    }
+  }
+
+  // ============================================================================
+  // PURCHASE ORDERS API METHODS
+  // ============================================================================
+
+  Future<List<PurchaseOrder>> getPurchaseOrders({
+    String? status,
+    String? supplierId,
+    int page = 1,
+    int limit = 20
+  }) async {
+    final queryParams = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (status != null && status.isNotEmpty) {
+      queryParams['status'] = status;
+    }
+    if (supplierId != null && supplierId.isNotEmpty) {
+      queryParams['supplier_id'] = supplierId;
+    }
+
+    final uri = Uri.parse('$baseUrl/purchase-orders').replace(queryParameters: queryParams);
+    print('ApiService: Making request to purchase orders: ${uri.toString()}');
+    final response = await http.get(uri, headers: _headers);
+    print('ApiService: Purchase orders response status: ${response.statusCode}');
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final poList = data['data'] as List?;
+      if (poList == null) {
+        return <PurchaseOrder>[];
+      }
+
+      return poList
+          .map((po) => PurchaseOrder.fromJson(po))
+          .toList();
+    } else if (response.statusCode == 401) {
+      if (_onTokenExpired != null) {
+        final refreshed = await _onTokenExpired!();
+        if (refreshed) {
+          return getPurchaseOrders(
+            status: status,
+            supplierId: supplierId,
+            page: page,
+            limit: limit,
+          );
+        }
+      }
+      throw Exception('Authentication failed - please login again');
+    } else {
+      throw Exception('Failed to fetch purchase orders: ${response.statusCode} - ${response.body}');
+    }
+  }
+
+  Future<PurchaseOrder> getPurchaseOrder(String id) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/pos/$id'),
+      headers: _headers,
+    );
+
+    if (response.statusCode == 200) {
+      return PurchaseOrder.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to fetch purchase order');
+    }
+  }
+
+  Future<PurchaseOrder> createPurchaseOrder({
+    required String supplierId,
+    DateTime? expectedAt,
+    String? notes,
+    List<Map<String, dynamic>>? lines,
+  }) async {
+    final requestBody = {
+      'supplier_id': supplierId,
+      'expected_at': expectedAt?.toIso8601String(),
+      'notes': notes,
+      'lines': lines ?? [],
+    };
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/pos'),
+      headers: _headers,
+      body: jsonEncode(requestBody),
+    );
+
+    if (response.statusCode == 201) {
+      return PurchaseOrder.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to create purchase order: ${response.body}');
+    }
+  }
+
+  Future<PurchaseOrder> updatePurchaseOrder(
+    String id, {
+    DateTime? expectedAt,
+    String? notes,
+    List<Map<String, dynamic>>? lines,
+  }) async {
+    final requestBody = <String, dynamic>{};
+    if (expectedAt != null) {
+      requestBody['expected_at'] = expectedAt.toIso8601String();
+    }
+    if (notes != null) {
+      requestBody['notes'] = notes;
+    }
+    if (lines != null) {
+      requestBody['lines'] = lines;
+    }
+
+    final response = await http.put(
+      Uri.parse('$baseUrl/pos/$id'),
+      headers: _headers,
+      body: jsonEncode(requestBody),
+    );
+
+    if (response.statusCode == 200) {
+      return PurchaseOrder.fromJson(jsonDecode(response.body));
+    } else {
+      throw Exception('Failed to update purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> approvePurchaseOrder(String id) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/pos/$id/approve'),
+      headers: _headers,
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to approve purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> receivePurchaseOrder(String id, List<Map<String, dynamic>> receipts) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/pos/$id/receive'),
+      headers: _headers,
+      body: jsonEncode(receipts),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to receive purchase order: ${response.body}');
+    }
+  }
+
+  Future<void> closePurchaseOrder(String id) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/pos/$id/close'),
+      headers: _headers,
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to close purchase order: ${response.body}');
     }
   }
 }

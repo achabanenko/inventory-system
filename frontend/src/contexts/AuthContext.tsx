@@ -1,5 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { login as loginApi, googleOAuth } from '../api/auth';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { login as loginApi, googleOAuth, refreshToken } from '../api/auth';
+import { setTokenProvider, setTokenRefreshCallback } from '../lib/api';
+import {
+  decodeJWT,
+  isValidJWT,
+  isTokenExpired,
+  getUserFromToken
+} from '../lib/jwt';
 
 interface User {
   id: string;
@@ -23,71 +30,303 @@ interface AuthContextType {
   loginWithGoogle: (code: string, redirectUri: string) => Promise<any>;
   logout: () => void;
   isLoading: boolean;
+  isAuthenticated: boolean;
+  accessToken: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Token storage (in memory, optionally sync to sessionStorage)
+class TokenManager {
+  private accessToken: string | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    // Load token from sessionStorage on initialization
+    const stored = sessionStorage.getItem('auth_token');
+    if (stored) {
+      try {
+        const data = JSON.parse(stored);
+        if (data.token && isValidJWT(data.token) && !isTokenExpired(data.token)) {
+          this.accessToken = data.token;
+        }
+      } catch (error) {
+        console.error('Failed to restore token from sessionStorage:', error);
+        sessionStorage.removeItem('auth_token');
+      }
+    }
+  }
+
+  getAccessToken(): string | null {
+    return this.accessToken;
+  }
+
+  setAccessToken(token: string | null): void {
+    this.accessToken = token;
+
+    if (token) {
+      // Store in sessionStorage for persistence across page refreshes
+      sessionStorage.setItem('auth_token', JSON.stringify({
+        token,
+        timestamp: Date.now(),
+      }));
+    } else {
+      // Clear from sessionStorage
+      sessionStorage.removeItem('auth_token');
+    }
+  }
+
+  clearTokens(): void {
+    this.accessToken = null;
+    sessionStorage.removeItem('auth_token');
+  }
+
+  // Store complete user information for persistence
+  setUserInfo(user: User | null, tenant: Tenant | null): void {
+    if (user) {
+      sessionStorage.setItem('auth_user', JSON.stringify({
+        user,
+        tenant,
+        timestamp: Date.now(),
+      }));
+    } else {
+      sessionStorage.removeItem('auth_user');
+    }
+  }
+
+  // Get stored user information
+  getUserInfo(): { user: User; tenant: Tenant | null } | null {
+    const stored = sessionStorage.getItem('auth_user');
+    if (!stored) return null;
+
+    try {
+      const data = JSON.parse(stored);
+      return {
+        user: data.user,
+        tenant: data.tenant,
+      };
+    } catch (error) {
+      console.error('Failed to restore user info from sessionStorage:', error);
+      sessionStorage.removeItem('auth_user');
+      return null;
+    }
+  }
+
+  clearUserInfo(): void {
+    sessionStorage.removeItem('auth_user');
+  }
+
+  setupAutoRefresh(onRefresh: () => Promise<boolean | void>): void {
+    this.clearAutoRefresh();
+
+    if (!this.accessToken) return;
+
+    const payload = decodeJWT(this.accessToken);
+    if (!payload) return;
+
+    // Calculate time until we should refresh (60 seconds before expiry)
+    const now = Math.floor(Date.now() / 1000);
+    const refreshAt = payload.exp - 60; // 60 seconds before expiry
+    const delay = Math.max(0, (refreshAt - now) * 1000);
+
+    console.log(`Setting up token refresh in ${delay / 1000} seconds`);
+
+    this.refreshTimer = setTimeout(async () => {
+      try {
+        await onRefresh();
+      } catch (error) {
+        console.error('Auto refresh failed:', error);
+      }
+    }, delay);
+  }
+
+  clearAutoRefresh(): void {
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const tokenManager = useRef(new TokenManager()).current;
+
+  // Auto refresh function
+  const performTokenRefresh = useCallback(async (): Promise<boolean> => {
+    try {
+      console.log('Attempting token refresh...');
+
+      // Call refresh endpoint (refresh token comes from HttpOnly cookie)
+      const response = await refreshToken('');
+
+      if (response.access_token) {
+        tokenManager.setAccessToken(response.access_token);
+
+        // Try to restore complete user info from sessionStorage
+        const storedUserInfo = tokenManager.getUserInfo();
+
+        if (storedUserInfo) {
+          // Use stored user information to maintain consistency
+          console.log('Restoring user info after token refresh:', storedUserInfo.user);
+          setUser(storedUserInfo.user);
+          if (storedUserInfo.tenant) {
+            setTenant(storedUserInfo.tenant);
+          }
+        } else {
+          // Fallback: extract basic info from new JWT token
+          const newUser = getUserFromToken(response.access_token);
+          if (newUser) {
+            const basicUser = {
+              id: newUser.id,
+              email: newUser.email,
+              name: '', // Will be populated on next login
+              role: newUser.role,
+              tenantId: newUser.tenantId,
+            };
+            setUser(basicUser);
+
+            if (newUser.tenantId) {
+              setTenant({
+                id: newUser.tenantId,
+                name: 'Current Tenant',
+                slug: 'current-tenant',
+              });
+            }
+          }
+        }
+
+        // Setup next auto refresh
+        tokenManager.setupAutoRefresh(performTokenRefresh);
+        console.log('Token refreshed successfully');
+        return true;
+      }
+    } catch (error) {
+      console.error('Token refresh failed:', error);
+      // Clear tokens and logout
+      tokenManager.clearTokens();
+      tokenManager.clearUserInfo();
+      setUser(null);
+      setTenant(null);
+    }
+    return false;
+  }, [tokenManager]);
+
+  // Set up token provider and refresh callback for API client
+  useEffect(() => {
+    setTokenProvider(tokenManager.getAccessToken.bind(tokenManager));
+    setTokenRefreshCallback(performTokenRefresh);
+  }, [tokenManager, performTokenRefresh]);
 
   useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      // Fetch current user and tenant information
-      fetchCurrentUserAndTenant();
-    } else {
-      setIsLoading(false);
-    }
-  }, []);
+    const initializeAuth = async () => {
+      const token = tokenManager.getAccessToken();
 
-  const fetchCurrentUserAndTenant = async () => {
-    try {
-      // TODO: Replace with actual API calls to get user and tenant info
-      // For now, don't set any default values - let the user authenticate properly
-      console.log('fetchCurrentUserAndTenant called - no default values set');
-    } catch (error) {
-      console.error('Failed to fetch user/tenant info:', error);
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-    } finally {
+      if (token && isValidJWT(token)) {
+        if (isTokenExpired(token)) {
+          console.log('Token expired, attempting refresh...');
+          const refreshSuccess = await performTokenRefresh();
+          if (!refreshSuccess) {
+            // Refresh failed, clear everything
+            tokenManager.clearTokens();
+            tokenManager.clearUserInfo();
+            setIsLoading(false);
+            return;
+          }
+        }
+
+        // Try to restore complete user info from sessionStorage first
+        const storedUserInfo = tokenManager.getUserInfo();
+
+        if (storedUserInfo) {
+          // Use stored user information (includes name, etc.)
+          console.log('Restoring user from sessionStorage:', storedUserInfo.user);
+          setUser(storedUserInfo.user);
+          if (storedUserInfo.tenant) {
+            setTenant(storedUserInfo.tenant);
+          }
+
+          // Setup auto refresh
+          tokenManager.setupAutoRefresh(performTokenRefresh);
+        } else {
+          // Fallback: extract basic info from JWT token
+          console.log('No stored user info, extracting from JWT token');
+          const userInfo = getUserFromToken(token);
+          if (userInfo) {
+            const basicUser = {
+              id: userInfo.id,
+              email: userInfo.email,
+              name: '', // Will be populated on next login
+              role: userInfo.role,
+              tenantId: userInfo.tenantId,
+            };
+            setUser(basicUser);
+
+            if (userInfo.tenantId) {
+              setTenant({
+                id: userInfo.tenantId,
+                name: 'Current Tenant',
+                slug: 'current-tenant',
+              });
+            }
+
+            // Setup auto refresh
+            tokenManager.setupAutoRefresh(performTokenRefresh);
+          }
+        }
+      }
+
       setIsLoading(false);
-    }
-  };
+    };
+
+    initializeAuth();
+
+    // Cleanup timer on unmount
+    return () => {
+      tokenManager.clearAutoRefresh();
+    };
+  }, [tokenManager, performTokenRefresh]);
 
   const login = async (email: string, password: string, tenantSlug?: string) => {
     try {
-      const loginData: any = { email, password };
-      if (tenantSlug) {
-        loginData.tenant_slug = tenantSlug;
-      }
-      
       const response = await loginApi(email, password, tenantSlug);
-      const { access_token, refresh_token, user, tenant } = response;
-      
-      localStorage.setItem('access_token', access_token);
-      localStorage.setItem('refresh_token', refresh_token);
-      
+      const { access_token, user, tenant } = response;
+
+      // Store access token in memory (refresh token is in HttpOnly cookie)
+      tokenManager.setAccessToken(access_token);
+
       // Set user and tenant from login response
-      if (user && tenant) {
-        setUser({
+      let userData: User | null = null;
+      let tenantData: Tenant | null = null;
+
+      if (user) {
+        userData = {
           id: user.id,
           email: user.email,
-          name: user.name,
+          name: user.name || '',
           role: user.role,
           tenantId: user.tenant_id,
-        });
-        
-        setTenant({
+        };
+        setUser(userData);
+      }
+
+      if (tenant) {
+        tenantData = {
           id: tenant.id,
           name: tenant.name,
           slug: tenant.slug,
-        });
-      } else {
-        // Fallback to fetching user and tenant information
-        await fetchCurrentUserAndTenant();
+        };
+        setTenant(tenantData);
       }
+
+      // Store complete user information for persistence across sessions
+      tokenManager.setUserInfo(userData, tenantData);
+
+      // Setup auto refresh
+      tokenManager.setupAutoRefresh(performTokenRefresh);
+
     } catch (error: any) {
       console.error('Login failed:', error);
       throw error;
@@ -97,56 +336,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithGoogle = async (code: string, redirectUri: string): Promise<any> => {
     try {
       console.log('loginWithGoogle called with:', { code, redirectUri });
-      
+
       // Call the backend OAuth endpoint
       const oauthData = { code, redirect_uri: redirectUri };
       console.log('OAuth data being sent:', oauthData);
       const response = await googleOAuth(oauthData);
       console.log('OAuth response received:', response);
-      
-      localStorage.setItem('access_token', response.access_token);
-      localStorage.setItem('refresh_token', response.refresh_token);
-      
+
+      // Store access token in memory (refresh token is in HttpOnly cookie)
+      tokenManager.setAccessToken(response.access_token);
+
       // Set user and tenant from OAuth response (backend returns lowercase property names)
+      let userData: User | null = null;
+      let tenantData: Tenant | null = null;
+
       if (response.user) {
         console.log('Setting user state:', response.user);
-        const newUser = {
+        userData = {
           id: response.user.id,
           email: response.user.email,
-          name: response.user.name,
+          name: response.user.name || '',
           role: response.user.role,
           tenantId: response.user.tenant_id || null, // May be null if user needs tenant selection
         };
-        
-        console.log('About to set user state to:', newUser);
-        setUser(newUser);
-        
+
+        console.log('About to set user state to:', userData);
+        setUser(userData);
+
         // Only set tenant if it exists (user already has a tenant)
         if (response.tenant) {
           console.log('Setting tenant state:', response.tenant);
-          const newTenant = {
+          tenantData = {
             id: response.tenant.id,
             name: response.tenant.name,
             slug: response.tenant.slug,
           };
-          
-          console.log('About to set tenant state to:', newTenant);
-          setTenant(newTenant);
+
+          console.log('About to set tenant state to:', tenantData);
+          setTenant(tenantData);
         } else {
           console.log('No tenant in response - user needs tenant selection');
           setTenant(null);
         }
-        
-        // Verify state was set
-        setTimeout(() => {
-          console.log('User state after setting:', user);
-          console.log('Tenant state after setting:', tenant);
-        }, 100);
+
+        // Store complete user information for persistence
+        tokenManager.setUserInfo(userData, tenantData);
       } else {
         console.log('No user in response, response structure:', response);
         console.log('Response keys:', Object.keys(response));
       }
-      
+
+      // Setup auto refresh
+      tokenManager.setupAutoRefresh(performTokenRefresh);
+
       // Return the response so the calling component can access it
       return response;
     } catch (error: any) {
@@ -156,10 +398,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+    // Clear tokens from memory and sessionStorage
+    tokenManager.clearTokens();
+    tokenManager.clearAutoRefresh();
+
+    // Clear user information from sessionStorage
+    tokenManager.clearUserInfo();
+
+    // Clear user and tenant state
     setUser(null);
     setTenant(null);
+
+    // Clear any legacy tokens from localStorage
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('tenant_id');
   };
 
   return (
@@ -170,6 +423,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loginWithGoogle,
       logout,
       isLoading,
+      isAuthenticated: !!user,
+      accessToken: tokenManager.getAccessToken(),
     }}>
       {children}
     </AuthContext.Provider>

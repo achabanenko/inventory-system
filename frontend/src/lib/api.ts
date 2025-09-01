@@ -1,6 +1,21 @@
 import axios, { AxiosError } from 'axios';
+import { getTenantIdFromToken } from './jwt';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1';
+
+// Token provider function that will be set by the AuthContext
+let getAccessToken: (() => string | null) | null = null;
+let onTokenRefresh: (() => Promise<boolean>) | null = null;
+
+// Function to set the token provider from AuthContext
+export function setTokenProvider(provider: () => string | null): void {
+  getAccessToken = provider;
+}
+
+// Function to set the token refresh callback
+export function setTokenRefreshCallback(callback: () => Promise<boolean>): void {
+  onTokenRefresh = callback;
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -11,17 +26,16 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('access_token');
+    // Get token from memory provider instead of localStorage
+    const token = getAccessToken ? getAccessToken() : null;
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-    }
 
-    // Add tenant ID header if available
-    // Note: In a real implementation, you'd extract this from the JWT token
-    // or store it in a context/store after login
-    const tenantId = localStorage.getItem('tenant_id');
-    if (tenantId) {
-      config.headers['X-Tenant-ID'] = tenantId;
+      // Extract and set tenant ID from JWT token
+      const tenantId = getTenantIdFromToken(token);
+      if (tenantId) {
+        config.headers['X-Tenant-ID'] = tenantId;
+      }
     }
 
     return config;
@@ -40,23 +54,26 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (!refreshToken) {
-          throw new Error('No refresh token');
+        // Use the token refresh callback from AuthContext
+        if (onTokenRefresh) {
+          const refreshSuccess = await onTokenRefresh();
+          if (refreshSuccess) {
+            // Get the new token and retry the request
+            const newToken = getAccessToken ? getAccessToken() : null;
+            if (newToken) {
+              originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              return api(originalRequest);
+            }
+          }
         }
 
-        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-          refresh_token: refreshToken,
-        });
-
-        const { access_token } = response.data;
-        localStorage.setItem('access_token', access_token);
-
-        originalRequest.headers.Authorization = `Bearer ${access_token}`;
-        return api(originalRequest);
+        // If refresh failed or no callback, redirect to login
+        throw new Error('Token refresh failed');
       } catch (refreshError) {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
+        // Clear any stored tokens and redirect to login
+        if (getAccessToken) {
+          // The AuthContext will handle clearing tokens
+        }
         window.location.href = '/login';
         return Promise.reject(refreshError);
       }

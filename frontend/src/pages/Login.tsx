@@ -19,6 +19,15 @@ export default function Login() {
   const { login, user } = useAuth();
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [rememberedEmail, setRememberedEmail] = useState<string>('');
+
+  // Load remembered email on component mount
+  useEffect(() => {
+    const savedEmail = localStorage.getItem('remembered_email');
+    if (savedEmail) {
+      setRememberedEmail(savedEmail);
+    }
+  }, []);
 
   // Watch for user authentication and redirect if user has a tenant
   useEffect(() => {
@@ -33,21 +42,34 @@ export default function Login() {
     register,
     handleSubmit,
     formState: { errors },
+    setValue,
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: 'admin@example.com',
+      email: rememberedEmail || 'admin@example.com',
       password: 'admin123',
     },
   });
 
+  // Update form when remembered email changes
+  useEffect(() => {
+    if (rememberedEmail) {
+      setValue('email', rememberedEmail);
+    }
+  }, [rememberedEmail, setValue]);
+
   const onSubmit = async (data: LoginForm) => {
     setError('');
     setIsLoading(true);
-    
+
     try {
       // Call login without tenant slug (will use first available tenant)
       await login(data.email, data.password);
+
+      // Remember the email for next login
+      localStorage.setItem('remembered_email', data.email);
+      setRememberedEmail(data.email);
+
       navigate('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Invalid email or password');
@@ -59,17 +81,16 @@ export default function Login() {
   const handleGoogleOAuthSuccess = async (data: any) => {
     try {
       console.log('OAuth success response:', data);
-      
-      // Store tokens (backend returns lowercase property names)
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('refresh_token', data.refresh_token);
-      
-      // User now has a tenant automatically, the useEffect will handle navigation
-      console.log('User has tenant, useEffect will handle navigation');
-      console.log('Stored tokens:', {
-        access_token: localStorage.getItem('access_token'),
-        refresh_token: localStorage.getItem('refresh_token')
-      });
+
+      // The AuthContext will handle token storage
+      // Refresh token is stored in HttpOnly cookie by backend
+      console.log('OAuth authentication successful - AuthContext will handle tokens');
+
+      // Remember the email for next login if available
+      if (data.user?.email) {
+        localStorage.setItem('remembered_email', data.user.email);
+        setRememberedEmail(data.user.email);
+      }
     } catch (err: any) {
       console.error('OAuth success handler error:', err);
       setError('Failed to complete Google authentication');

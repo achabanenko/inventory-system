@@ -90,6 +90,36 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _loginWithGoogle() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final authService = Provider.of<SecureAuthService>(context, listen: false);
+    final success = await authService.loginWithGoogle();
+
+    setState(() {
+      _isLoading = false;
+    });
+
+    if (success) {
+      // Notify parent widget of successful login
+      widget.onLoginSuccess?.call();
+    } else {
+      // Notify parent widget of login failure
+      widget.onLoginFailure?.call();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Google sign-in failed. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -213,9 +243,47 @@ class _LoginScreenState extends State<LoginScreen> {
                             valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                           ),
                         )
-                      : const Text('Login'),
+                      : const Text('Login with Email'),
                 ),
                 const SizedBox(height: 16),
+                // Divider with "OR"
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'OR',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Google OAuth Button
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : _loginWithGoogle,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                    side: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  icon: const Icon(
+                    Icons.g_mobiledata,
+                    size: 24,
+                    color: Color(0xFF4285F4),
+                  ),
+                  label: const Text(
+                    'Continue with Google',
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
                 Text(
                   'Default Admin: admin@example.com / admin123',
                   style: Theme.of(context).textTheme.bodySmall,

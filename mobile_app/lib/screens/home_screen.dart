@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../services/secure_auth_service.dart';
 import 'items_screen.dart';
 import 'barcode_scanner_screen.dart';
+import 'purchase_orders_screen.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 
@@ -18,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> {
   
   final List<Widget> _screens = [
     const ItemsScreen(),
+    const PurchaseOrdersScreen(),
     const BarcodeScannerScreen(),
     const ChatScreen(),
     const SettingsScreen(),
@@ -89,6 +91,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.inventory),
             label: 'Items',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.receipt_long),
+            label: 'Purchase Orders',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.qr_code_scanner),

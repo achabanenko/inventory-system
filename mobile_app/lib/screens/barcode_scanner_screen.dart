@@ -2,7 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_barcode_scanner/flutter_barcode_scanner.dart';
 import 'package:provider/provider.dart';
 import '../models/item.dart';
+import '../models/purchase_order.dart';
 import '../services/api_service.dart';
+import 'purchase_order_create_screen.dart';
+import 'goods_receipt_screen.dart';
+
+enum BarcodeScanMode {
+  lookup,      // Just find and display item info
+  addToOrder,  // Add item to a new or existing purchase order
+  receive,     // Receive items for goods receipt
+}
 
 class BarcodeScannerScreen extends StatefulWidget {
   const BarcodeScannerScreen({super.key});
@@ -15,6 +24,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   String _lastScannedCode = '';
   Item? _scannedItem;
   bool _isLoading = false;
+  BarcodeScanMode _scanMode = BarcodeScanMode.lookup;
 
   Future<void> _scanBarcode() async {
     try {
@@ -48,6 +58,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
             backgroundColor: Colors.orange,
           ),
         );
+      } else if (item != null && mounted) {
+        await _handleScanResult(item);
       }
     } catch (e) {
       setState(() {
@@ -62,6 +74,224 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _handleScanResult(Item item) async {
+    switch (_scanMode) {
+      case BarcodeScanMode.lookup:
+        // Just show the item info (already handled in the scan method)
+        break;
+      case BarcodeScanMode.addToOrder:
+        await _handleAddToOrder(item);
+        break;
+      case BarcodeScanMode.receive:
+        await _handleReceiveItem(item);
+        break;
+    }
+  }
+
+  Future<void> _handleAddToOrder(Item item) async {
+    // Show options: Create new PO or add to existing PO
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add to Purchase Order'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add, color: Color(0xFF2563EB)),
+              title: const Text('Create New PO'),
+              subtitle: const Text('Start a new purchase order with this item'),
+              onTap: () => Navigator.pop(context, 'new'),
+            ),
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Add to existing PO feature coming soon!',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == 'new' && mounted) {
+      // Navigate to PO creation screen with pre-selected item
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PurchaseOrderCreateScreen(
+            preSelectedItem: item,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleReceiveItem(Item item) async {
+    // Get approved POs that contain this item
+    setState(() => _isLoading = true);
+
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final purchaseOrders = await apiService.getPurchaseOrders(
+        status: 'APPROVED',
+      );
+
+      // Filter POs that contain this item
+      final relevantPOs = purchaseOrders.where((po) =>
+        po.lines.any((line) => line.itemId == item.id && line.qtyRemaining > 0)
+      ).toList();
+
+      setState(() => _isLoading = false);
+
+      if (relevantPOs.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No approved purchase orders found for this item'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      if (relevantPOs.length == 1) {
+        // Only one PO, go directly to receipt
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => GoodsReceiptScreen(purchaseOrder: relevantPOs[0]),
+            ),
+          );
+        }
+      } else {
+        // Multiple POs, let user choose
+        await _showPOSelectionDialog(relevantPOs, item);
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _showPOSelectionDialog(List<PurchaseOrder> pos, Item item) async {
+    final selectedPO = await showDialog<PurchaseOrder>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Select Purchase Order for ${item.name}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: pos.length,
+            itemBuilder: (context, index) {
+              final po = pos[index];
+              final line = po.lines.firstWhere((line) => line.itemId == item.id);
+              return ListTile(
+                title: Text('PO ${po.number}'),
+                subtitle: Text(
+                  '${po.supplierName ?? 'Unknown'} • ${line.qtyRemaining} remaining'
+                ),
+                onTap: () => Navigator.pop(context, po),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (selectedPO != null && mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => GoodsReceiptScreen(purchaseOrder: selectedPO),
+        ),
+      );
+    }
+  }
+
+  void _showModeSelectionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Scan Mode'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RadioListTile<BarcodeScanMode>(
+              title: const Text('Lookup Item'),
+              subtitle: const Text('Find and display item information'),
+              value: BarcodeScanMode.lookup,
+              groupValue: _scanMode,
+              onChanged: (value) {
+                setState(() => _scanMode = value!);
+                Navigator.pop(context);
+              },
+            ),
+            RadioListTile<BarcodeScanMode>(
+              title: const Text('Add to Purchase Order'),
+              subtitle: const Text('Add scanned item to a new or existing PO'),
+              value: BarcodeScanMode.addToOrder,
+              groupValue: _scanMode,
+              onChanged: (value) {
+                setState(() => _scanMode = value!);
+                Navigator.pop(context);
+              },
+            ),
+            RadioListTile<BarcodeScanMode>(
+              title: const Text('Receive Items'),
+              subtitle: const Text('Receive items for goods receipt'),
+              value: BarcodeScanMode.receive,
+              groupValue: _scanMode,
+              onChanged: (value) {
+                setState(() => _scanMode = value!);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getModeDescription() {
+    switch (_scanMode) {
+      case BarcodeScanMode.lookup:
+        return 'Find and display item information';
+      case BarcodeScanMode.addToOrder:
+        return 'Add scanned item to purchase order';
+      case BarcodeScanMode.receive:
+        return 'Receive items for goods receipt';
     }
   }
 
@@ -87,8 +317,53 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
               ),
             ),
             const SizedBox(height: 16),
+
+            // Mode selection
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[200]!),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.settings, color: Color(0xFF2563EB)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Scan Mode',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              _getModeDescription(),
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: _showModeSelectionDialog,
+                        icon: const Icon(Icons.edit, size: 16),
+                        label: const Text('Change'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF2563EB),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
             Text(
-              'Tap the button below to scan a barcode and find the corresponding item in your inventory.',
+              'Tap the button below to scan a barcode.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                 color: Colors.grey[600],
