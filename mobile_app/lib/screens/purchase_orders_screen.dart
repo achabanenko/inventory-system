@@ -451,8 +451,13 @@ class _PurchaseOrderCard extends StatelessWidget {
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: onTap,
-                      icon: const Icon(Icons.edit, size: 16),
-                      label: Text(purchaseOrder.status == PurchaseOrderStatus.draft || purchaseOrder.status == PurchaseOrderStatus.approved ? 'Edit PO' : 'View PO'),
+                      icon: Icon(
+                        purchaseOrder.status == PurchaseOrderStatus.draft || purchaseOrder.status == PurchaseOrderStatus.approved 
+                          ? Icons.qr_code_scanner 
+                          : Icons.visibility, 
+                        size: 16
+                      ),
+                      label: Text(purchaseOrder.status == PurchaseOrderStatus.draft || purchaseOrder.status == PurchaseOrderStatus.approved ? 'Scan Items' : 'View PO'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF2563EB),
                         side: const BorderSide(color: Color(0xFF2563EB)),

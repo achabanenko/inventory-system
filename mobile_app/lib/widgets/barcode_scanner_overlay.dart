@@ -1,15 +1,37 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:audioplayers/audioplayers.dart';
+
+enum ScannerMode {
+  single,     // Scan one item and close
+  continuous, // Keep scanning multiple items
+  batch,      // Scan multiple items with count
+  showDetail, // Scan and show item detail screen
+}
 
 class BarcodeScannerOverlay extends StatefulWidget {
   final Function(String) onBarcodeScanned;
   final VoidCallback onCancel;
+  final ScannerMode mode;
+  final bool showManualEntry;
+  final bool playSound;
+  final String? headerText;
+  final Widget? contextWidget;
+  final String? documentType; // For showDetail mode
+  final Map<String, dynamic>? contextData; // For showDetail mode
 
   const BarcodeScannerOverlay({
     super.key,
     required this.onBarcodeScanned,
     required this.onCancel,
+    this.mode = ScannerMode.single,
+    this.showManualEntry = true,
+    this.playSound = true,
+    this.headerText,
+    this.contextWidget,
+    this.documentType,
+    this.contextData,
   });
 
   @override
@@ -22,6 +44,11 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
   bool hasScanned = false;
   late AnimationController _animationController;
   late Animation<double> _animation;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final List<String> _scannedBarcodes = [];
+  final TextEditingController _manualEntryController = TextEditingController();
+  bool _showManualEntry = false;
+  bool _torchEnabled = false;
 
   @override
   void initState() {
@@ -57,7 +84,7 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
   }
 
   void _onDetect(BarcodeCapture capture) {
-    if (hasScanned) return;
+    if (widget.mode == ScannerMode.single && hasScanned) return;
     
     final List<Barcode> barcodes = capture.barcodes;
     if (barcodes.isNotEmpty) {
@@ -65,16 +92,94 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
       final String? code = barcode.rawValue;
       
       if (code != null && code.isNotEmpty && _isValidProductBarcode(code, barcode.format)) {
+        // Check if already scanned in batch/continuous mode
+        if (widget.mode != ScannerMode.single && _scannedBarcodes.contains(code)) {
+          _showDuplicateWarning(code);
+          return;
+        }
+        
         setState(() {
-          hasScanned = true;
+          if (widget.mode == ScannerMode.single) {
+            hasScanned = true;
+          } else {
+            _scannedBarcodes.add(code);
+          }
         });
         
-        // Provide haptic feedback
-        HapticFeedback.mediumImpact();
+        // Provide feedback
+        _provideFeedback();
         
         widget.onBarcodeScanned(code);
+        
+        // Note: Do NOT auto-close for single mode - let the parent handle navigation
+        // The parent will navigate to ScannedItemScreen and we don't want to interfere
       }
     }
+  }
+  
+  void _provideFeedback() async {
+    // Haptic feedback
+    HapticFeedback.mediumImpact();
+    
+    // Audio feedback
+    if (widget.playSound) {
+      try {
+        await _audioPlayer.play(AssetSource('sounds/beep.mp3'));
+      } catch (e) {
+        // Fallback to system sound if custom sound fails
+        SystemSound.play(SystemSoundType.click);
+      }
+    }
+    
+    // Visual feedback
+    _showScanSuccess();
+  }
+  
+  void _showScanSuccess() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white),
+            const SizedBox(width: 8),
+            Text(widget.mode == ScannerMode.single 
+              ? 'Barcode scanned successfully!' 
+              : 'Item added (${_scannedBarcodes.length} total)'),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
+  
+  void _showDuplicateWarning(String code) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.warning, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Item $code already scanned')),
+          ],
+        ),
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
+    
+    // Vibrate for warning
+    HapticFeedback.heavyImpact();
   }
 
   /// Validate that the scanned code is a proper product barcode
@@ -174,90 +279,227 @@ class _BarcodeScannerOverlayState extends State<BarcodeScannerOverlay>
             },
           ),
 
-          // Top toolbar
+          // Top toolbar with context
           SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: widget.onCancel,
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  ),
-                  const Expanded(
-                    child: Text(
-                      'Scan Barcode',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
+            child: Column(
+              children: [
+                // Header toolbar
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        onPressed: widget.onCancel,
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
                       ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      controller?.toggleTorch();
-                    },
-                    icon: ValueListenableBuilder<bool>(
-                      valueListenable: ValueNotifier(false), // Simplified for compatibility
-                      builder: (context, state, child) {
-                        return Icon(
-                          state ? Icons.flash_on : Icons.flash_off,
+                      Expanded(
+                        child: Text(
+                          widget.headerText ?? 'Scan Barcode',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _torchEnabled = !_torchEnabled;
+                            controller?.toggleTorch();
+                          });
+                        },
+                        icon: Icon(
+                          _torchEnabled ? Icons.flash_on : Icons.flash_off,
                           color: Colors.white,
-                        );
-                      },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Context widget if provided
+                if (widget.contextWidget != null)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: widget.contextWidget!,
+                  ),
+                
+                // Scanned items counter for batch/continuous mode
+                if (widget.mode != ScannerMode.single && _scannedBarcodes.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.8),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.check_circle, color: Colors.white, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${_scannedBarcodes.length} items scanned',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+              ],
             ),
           ),
 
-          // Bottom instruction text
+          // Bottom instruction text and manual entry
           Positioned(
-            bottom: 100,
+            bottom: 20,
             left: 0,
             right: 0,
             child: Column(
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.qr_code_scanner,
-                        color: Colors.white,
-                        size: 48,
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Position the barcode within the frame',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                        ),
-                      ),
-                      if (hasScanned)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Barcode detected! Processing...',
-                            style: TextStyle(
-                              color: Colors.green,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
+                // Manual entry section
+                if (_showManualEntry)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 32),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Enter Barcode Manually',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                    ],
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _manualEntryController,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            hintText: 'Enter barcode number',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.send),
+                              onPressed: () {
+                                final code = _manualEntryController.text.trim();
+                                if (code.isNotEmpty) {
+                                  widget.onBarcodeScanned(code);
+                                  _manualEntryController.clear();
+                                  setState(() {
+                                    _showManualEntry = false;
+                                  });
+                                  if (widget.mode == ScannerMode.single) {
+                                    Navigator.pop(context);
+                                  }
+                                }
+                              },
+                            ),
+                          ),
+                          onSubmitted: (code) {
+                            if (code.trim().isNotEmpty) {
+                              widget.onBarcodeScanned(code.trim());
+                              _manualEntryController.clear();
+                              setState(() {
+                                _showManualEntry = false;
+                              });
+                              if (widget.mode == ScannerMode.single) {
+                                Navigator.pop(context);
+                              }
+                            }
+                          },
+                          autofocus: true,
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: () {
+                            setState(() {
+                              _showManualEntry = false;
+                            });
+                          },
+                          child: const Text('Cancel'),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        const Icon(
+                          Icons.qr_code_scanner,
+                          color: Colors.white,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Position the barcode within the frame',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (hasScanned)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text(
+                              'Barcode detected! Processing...',
+                              style: TextStyle(
+                                color: Colors.green,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (widget.showManualEntry)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _showManualEntry = true;
+                                });
+                              },
+                              icon: const Icon(Icons.keyboard, color: Colors.white),
+                              label: const Text(
+                                'Enter manually',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              style: TextButton.styleFrom(
+                                backgroundColor: Colors.white.withOpacity(0.2),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),

@@ -107,6 +107,54 @@ class ApiService {
     }
   }
 
+  // Item search operations
+  Future<List<Item>> searchItems(String query, String searchType) async {
+    try {
+      final queryParams = {
+        'q': query,
+        'type': searchType, // 'code', 'barcode', or 'description'
+      };
+      
+      final response = await http.get(
+        Uri.parse('$baseUrl/items/search').replace(queryParameters: queryParams),
+        headers: _headers,
+      );
+      
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((json) => Item.fromJson(json)).toList();
+      } else {
+        // Fallback to regular items endpoint with client-side filtering
+        final items = await getItems();
+        
+        switch (searchType) {
+          case 'code':
+            return items.where((item) => 
+              item.sku.toLowerCase() == query.toLowerCase()
+            ).toList();
+          case 'barcode':
+            return items.where((item) => 
+              item.barcode?.toLowerCase() == query.toLowerCase()
+            ).toList();
+          case 'description':
+            return items.where((item) => 
+              item.name.toLowerCase().contains(query.toLowerCase()) ||
+              (item.description?.toLowerCase().contains(query.toLowerCase()) ?? false)
+            ).toList();
+          default:
+            return items.where((item) => 
+              item.sku.toLowerCase().contains(query.toLowerCase()) ||
+              item.name.toLowerCase().contains(query.toLowerCase()) ||
+              (item.barcode?.toLowerCase().contains(query.toLowerCase()) ?? false)
+            ).toList();
+        }
+      }
+    } catch (e) {
+      print('Error searching items: $e');
+      throw Exception('Failed to search items');
+    }
+  }
+
   Future<List<Item>> getItems({String? search, int page = 1, int limit = 20, bool useCache = true}) async {
     // Use cached version if enabled
     if (useCache) {
@@ -577,6 +625,33 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Failed to add item to purchase order: ${response.body}');
+    }
+  }
+
+  // Update purchase order line quantity
+  // Note: Backend doesn't have PUT endpoint for updating quantities
+  // This is a workaround that deletes and re-adds the item
+  Future<void> updatePurchaseOrderLineQuantity(String poId, String lineId, int quantity) async {
+    try {
+      // First, get the current line details by fetching the PO
+      final po = await getPurchaseOrder(poId);
+      final lineIndex = po.lines.indexWhere((l) => l.id == lineId);
+      
+      if (lineIndex == -1) {
+        throw Exception('Purchase order line not found');
+      }
+      
+      final line = po.lines[lineIndex];
+      
+      // Delete the existing line
+      await removeItemFromPurchaseOrder(poId, lineId);
+      
+      // Re-add the item with the new quantity
+      await addItemToPurchaseOrder(poId, line.itemId, quantity, line.unitCost);
+      
+    } catch (e) {
+      print('Error updating purchase order line: $e');
+      throw Exception('Failed to update purchase order line: ${e.toString()}');
     }
   }
 

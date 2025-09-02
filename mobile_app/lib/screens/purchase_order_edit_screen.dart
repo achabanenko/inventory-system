@@ -8,6 +8,7 @@ import '../models/item.dart';
 import '../services/api_service.dart';
 import '../widgets/expandable_fab.dart';
 import '../widgets/barcode_scanner_overlay.dart';
+import '../screens/scanned_item_screen.dart';
 
 class PurchaseOrderEditScreen extends StatefulWidget {
   final PurchaseOrder purchaseOrder;
@@ -32,7 +33,6 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
   DateTime? _expectedDate;
   bool _isLoading = false;
   bool _isSaving = false;
-  bool _hasChanges = false;
 
   // Item search and selection
   List<Item> _searchResults = [];
@@ -43,6 +43,10 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     super.initState();
     _initializeFromPO();
     _loadSuppliers();
+    // Refresh the purchase order to get the latest data on screen load
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshPurchaseOrder();
+    });
   }
 
   void _initializeFromPO() {
@@ -70,7 +74,6 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
       final updatedPO = await apiService.getPurchaseOrder(widget.purchaseOrder.id);
       setState(() {
         _lines = List.from(updatedPO.lines);
-        _hasChanges = false;
       });
     } catch (e) {
       // Handle error silently or show a message
@@ -131,7 +134,7 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     try {
       print('Starting barcode scan for PO edit...');
       
-      // Use the new barcode scanner overlay
+      // Use the new barcode scanner overlay with purchase order context
       final barcode = await Navigator.of(context).push<String>(
         MaterialPageRoute(
           fullscreenDialog: true,
@@ -142,6 +145,39 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
             onCancel: () {
               Navigator.of(context).pop();
             },
+            headerText: 'Scan Item for PO ${widget.purchaseOrder.number}',
+            contextWidget: Container(
+              child: Row(
+                children: [
+                  const Icon(Icons.receipt_long, color: Colors.white, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'PO ${widget.purchaseOrder.number}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          widget.purchaseOrder.supplierName ?? 'Unknown Supplier',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            mode: ScannerMode.single,
+            playSound: true,
           ),
         ),
       );
@@ -152,19 +188,16 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
       // Play success sound
       SystemSound.play(SystemSoundType.click);
 
-      // Search for item by barcode
+      // Search for item by barcode using the new search method
       final apiService = Provider.of<ApiService>(context, listen: false);
-      final item = await apiService.getItemByBarcode(barcode);
+      final items = await apiService.searchItems(barcode, 'barcode');
 
-      if (item != null && mounted) {
-        _addItemToOrder(item);
+      if (items.isNotEmpty && mounted) {
+        // Found item - show scanned item detail screen
+        _addItemToOrder(items.first);
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('No item found for barcode: $barcode'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        // Item not found - show option to create or scan another
+        _showItemNotFoundDialog(barcode);
       }
     } catch (e) {
       print('Barcode scan error: $e');
@@ -177,41 +210,226 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
   }
 
   Future<void> _addItemToOrder(Item item) async {
-    try {
-      // Call API to add item directly to purchase order
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      await apiService.addItemToPurchaseOrder(
-        widget.purchaseOrder.id,
-        item.id,
-        1, // Default quantity of 1
-        item.costPrice,
-      );
+    // Show scanned item detail screen and wait for result
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ScannedItemScreen(
+          scannedItem: item,
+          documentType: 'Purchase Order',
+          contextData: {
+            'po_number': widget.purchaseOrder.number,
+            'supplier': widget.purchaseOrder.supplierName ?? 'Unknown Supplier',
+          },
+          onAddToDocument: (item, quantity) async {
+            try {
+              // Call API to add item with specified quantity
+              final apiService = Provider.of<ApiService>(context, listen: false);
+              await apiService.addItemToPurchaseOrder(
+                widget.purchaseOrder.id,
+                item.id,
+                quantity.toInt(),
+                item.price,
+              );
 
-      // Refresh the purchase order to get updated data
-      await _refreshPurchaseOrder();
+              // Refresh the purchase order to get updated data
+              await _refreshPurchaseOrder();
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${item.name} added to purchase order'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to add item: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${item.name} added to purchase order'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+              
+              // Return success result
+              Navigator.pop(context, true);
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to add item: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+              // Return failure result
+              Navigator.pop(context, false);
+            }
+          },
+        ),
+      ),
+    );
+
+    // Only clear search if item was successfully added or user cancelled
+    if (result == true || result == null) {
+      _searchController.clear();
+      setState(() => _searchResults = []);
     }
-
-    // Clear search
-    _searchController.clear();
-    setState(() => _searchResults = []);
+  }
+  
+  void _showItemNotFoundDialog(String barcode) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Item Not Found'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('No item found with barcode:'),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                barcode,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('What would you like to do?'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _scanBarcode(); // Scan another barcode
+            },
+            child: const Text('Scan Another'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _showCreateItemDialog(barcode);
+            },
+            child: const Text('Create Item'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showCreateItemDialog(String barcode) {
+    final nameController = TextEditingController();
+    final skuController = TextEditingController();
+    final priceController = TextEditingController(text: '0.00');
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create New Item'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: skuController,
+                decoration: const InputDecoration(
+                  labelText: 'Item SKU/Code *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Item Name *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: priceController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Unit Price',
+                  border: OutlineInputBorder(),
+                  prefixText: '\$',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Text('Barcode: '),
+                    Text(
+                      barcode,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (nameController.text.trim().isEmpty || skuController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please fill in required fields'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                return;
+              }
+              
+              // Create temporary item for the scanned item flow
+              final newItem = Item(
+                id: DateTime.now().millisecondsSinceEpoch.toString(),
+                sku: skuController.text.trim(),
+                name: nameController.text.trim(),
+                barcode: barcode,
+                price: double.tryParse(priceController.text) ?? 0.0,
+                costPrice: double.tryParse(priceController.text) ?? 0.0,
+                uom: 'PCS',
+                isActive: true,
+              );
+              
+              Navigator.pop(context);
+              
+              // Show scanned item detail for the new item
+              _addItemToOrder(newItem);
+            },
+            child: const Text('Create & Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showLineActionsMenu(BuildContext context, int index) {
@@ -279,7 +497,6 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     
     setState(() {
       _lines.insert(index + 1, duplicatedLine);
-      _hasChanges = true;
     });
     
     HapticFeedback.lightImpact();
@@ -339,30 +556,54 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     );
   }
 
-  void _updateLineQuantity(int index, int quantity) {
+  void _updateLineQuantity(int index, int quantity) async {
     if (quantity <= 0) {
-      setState(() {
-        _lines.removeAt(index);
-        _hasChanges = true;
-      });
+      // Remove the line entirely
+      final lineToRemove = _lines[index];
+      try {
+        final apiService = Provider.of<ApiService>(context, listen: false);
+        await apiService.removeItemFromPurchaseOrder(widget.purchaseOrder.id, lineToRemove.id);
+        
+        // Refresh the purchase order data to get updated lines
+        await _refreshPurchaseOrder();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Item removed from purchase order')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to remove item: $e')),
+          );
+        }
+      }
     } else {
       final line = _lines[index];
-      final updatedLine = PurchaseOrderLine(
-        id: line.id,
-        poId: line.poId,
-        itemId: line.itemId,
-        itemName: line.itemName,
-        itemSku: line.itemSku,
-        barcode: line.barcode,
-        qtyOrdered: quantity,
-        qtyReceived: line.qtyReceived,
-        unitCost: line.unitCost,
-        tax: line.tax,
-      );
-      setState(() {
-        _lines[index] = updatedLine;
-        _hasChanges = true;
-      });
+      try {
+        final apiService = Provider.of<ApiService>(context, listen: false);
+        await apiService.updatePurchaseOrderLineQuantity(
+          widget.purchaseOrder.id, 
+          line.id, 
+          quantity
+        );
+        
+        // Refresh the purchase order data to get updated line IDs
+        await _refreshPurchaseOrder();
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Quantity updated')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to update quantity: $e')),
+          );
+        }
+      }
     }
   }
 
@@ -419,8 +660,7 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
       // Update local state on successful API call
       setState(() {
         _lines.removeAt(index);
-        _hasChanges = true;
-      });
+        });
 
       // Hide loading indicator and show success message
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -671,7 +911,6 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Purchase order updated successfully')),
         );
-        setState(() => _hasChanges = false);
         Navigator.pop(context, true); // Return true to indicate changes were saved
       }
     } catch (e) {
@@ -688,52 +927,15 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
     }
   }
 
-  Future<bool> _onWillPop() async {
-    if (!_hasChanges) return true;
-
-    return await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Unsaved Changes'),
-        content: const Text('You have unsaved changes. Are you sure you want to leave?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Stay'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
-    ) ?? false;
-  }
 
   @override
   Widget build(BuildContext context) {
     final po = widget.purchaseOrder;
     final canEdit = po.status == PurchaseOrderStatus.draft || po.status == PurchaseOrderStatus.approved;
 
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: Scaffold(
+    return Scaffold(
         appBar: AppBar(
           title: Text('Edit PO ${po.number}'),
-          actions: [
-            if (canEdit)
-              TextButton(
-                onPressed: _isSaving ? null : _savePurchaseOrder,
-                child: _isSaving 
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Save', style: TextStyle(color: Colors.white)),
-              ),
-          ],
         ),
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -771,6 +973,165 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
                     ),
                   ),
 
+                  // PO General Information Header
+                  Container(
+                    margin: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'PO ${po.number}',
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF2563EB),
+                                    ),
+                                  ),
+                                  Text(
+                                    po.supplierName ?? 'Unknown Supplier',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '\$${_lines.fold<double>(0, (sum, line) => sum + line.lineTotal).toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF059669),
+                                  ),
+                                ),
+                                Text(
+                                  'Total Amount',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue[50],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '${_lines.length}',
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF2563EB),
+                                      ),
+                                    ),
+                                    Text(
+                                      'Items',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.green[50],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '${_lines.fold<int>(0, (sum, line) => sum + line.qtyOrdered)}',
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF059669),
+                                      ),
+                                    ),
+                                    Text(
+                                      'Total Qty',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange[50],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '${_lines.fold<int>(0, (sum, line) => sum + line.qtyReceived)}',
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFFEA580C),
+                                      ),
+                                    ),
+                                    Text(
+                                      'Received',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
                   Expanded(
                     child: Form(
                       key: _formKey,
@@ -785,22 +1146,23 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Icon(
-                                          Icons.inventory_2,
+                                          Icons.qr_code_scanner,
                                           size: 64,
-                                          color: Colors.grey[400],
+                                          color: Colors.blue[400],
                                         ),
                                         const SizedBox(height: 16),
                                         Text(
-                                          'No items in this order',
+                                          'Ready to Add Items!',
                                           style: TextStyle(
-                                            fontSize: 18,
-                                            color: Colors.grey[600],
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.grey[700],
                                           ),
                                         ),
                                         if (canEdit) ...[
-                                          const SizedBox(height: 8),
+                                          const SizedBox(height: 12),
                                           const Text(
-                                            'Search for items or scan barcodes to add them',
+                                            'Scan barcodes or search for items to build your purchase order',
                                             textAlign: TextAlign.center,
                                             style: TextStyle(color: Colors.grey),
                                           ),
@@ -1065,14 +1427,6 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
                                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                     ),
                                   ),
-                                  if (_hasChanges && canEdit)
-                                    Text(
-                                      '• Unsaved changes',
-                                      style: TextStyle(
-                                        color: Colors.orange[600],
-                                        fontSize: 12,
-                                      ),
-                                    ),
                                 ],
                               ),
                             ),
@@ -1110,33 +1464,8 @@ class _PurchaseOrderEditScreenState extends State<PurchaseOrderEditScreen> {
                 );
               },
             ),
-            FabAction(
-              icon: const Icon(Icons.file_upload),
-              tooltip: 'Import Items',
-              backgroundColor: Colors.purple,
-              heroTag: 'import_items',
-              onPressed: () {
-                // TODO: Implement CSV import
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Import from CSV - Coming Soon!')),
-                );
-              },
-            ),
-            FabAction(
-              icon: const Icon(Icons.favorite),
-              tooltip: 'Favorites',
-              backgroundColor: Colors.red,
-              heroTag: 'favorites',
-              onPressed: () {
-                // TODO: Show favorite items
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Favorite items - Coming Soon!')),
-                );
-              },
-            ),
           ],
         ) : null,
-      ),
     );
   }
 

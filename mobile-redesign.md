@@ -1,0 +1,1 @@
+cab we do review design of item detail check, we have 2 separate options to check item detail  , one is on tab "items"
